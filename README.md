@@ -13,6 +13,7 @@ A revolutionary calculator leveraging XOR dual-state management, parallel comput
 - **abc_engines.py**: Base MathEngine with dunders, parallel helpers, and priority ordering.
 - **segment_manager.py**: Manages part orders, dropdown assembly, and structure integration.
 - **test_main.py**: Basic validation script.
+- **xor_sub_dirs.py**: XOR subdirectory helper for parallel execution.
 
 ## Getting Started
 1. Run `python test_main.py` for a sample flow.
@@ -20,8 +21,8 @@ A revolutionary calculator leveraging XOR dual-state management, parallel comput
 3. Contribute forks for more fields!
 
 ## Roadmap
-- Fill stubs with library integrations.
-- Threaded workers for potency.
+- Pre-stub integrations for more math fields.
+- Integrate methods for more complex math.
 - Open-source release when useful.
 
 Built with AI assistance—let's compute the future!
