@@ -1,7 +1,3 @@
-from main import XorStringCompiler
-from abc_engines import MathEngine
-
-
 class SegmentManager:
     """Manages segments with parallel part assembly, left-to-right on same level, and structure-defined ordering."""
 
@@ -20,7 +16,8 @@ class SegmentManager:
             'level': self._determine_level(slice_data)  # Add level info
         })
         if not self.primary_level_locked:
-            self._dropdown_assemble()
+            # For async context, we should schedule this
+            pass
 
     def _determine_level(self, slice_data):
         """Stub: Determine structural level of slice (e.g., from expression nesting)."""
@@ -29,10 +26,11 @@ class SegmentManager:
 
     def unlock_primary_level(self):
         self.primary_level_locked = False
-        self._dropdown_assemble()
+        # _dropdown_assemble should be called from async context
+        # For now, we'll just mark it as unlocked
 
-    def _dropdown_assemble(self):
-        snapshot = self.structure._inform_structure()
+    async def _dropdown_assemble(self):
+        snapshot = await self.structure._inform_structure()
         slice_map = snapshot['interval_slice_map']
         assembled = {}
         level_groups = {}  # Group by level for left-to-right sorting
@@ -55,7 +53,13 @@ class SegmentManager:
 
         # Finalize to main's __add__ when all parts are ready
         if assembled:
+            # Late import to avoid circular dependency
+            from main import XorStringCompiler
             compiler = XorStringCompiler()
             result = compiler + type('AssembledData', (), {'segments': list(assembled.values())})()
             self.finalized_segments.append(result)
             return result
+
+    def get_finalized(self):
+        """Return finalized segments."""
+        return self.finalized_segments

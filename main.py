@@ -1,14 +1,13 @@
-from inspect import trace
+from inspect import trace as trace_func
 import asyncio
 from collections import defaultdict
 from abc_engines import MathEngine, BasicArithmeticEngine, TrigonometryEngine
 from xor_sub_dirs import XorSubDirectory # Awaiting integration
 
-class StageTracer(trace):
+class StageTracer:
     """Class for tracing the execution of the expression."""
 
     def __init__(self):
-        super().__init__()
         self.trace_data = []
 
     def __bool__(self):
@@ -20,11 +19,10 @@ class StageTracer(trace):
         else:
             print("No trace data")
 
-class Structure(trace):
+class Structure:
     """Class for determining the structure of the expression and returning a snapshot of all slices."""
 
     def __init__(self):
-        super().__init__()
         self.flags = {}
         self._initialize_flags()
 
@@ -181,11 +179,10 @@ class Compute:
         except:
             return final_bytes.decode('utf-8', errors='ignore')
 
-class Diagnostic(trace):
+class Diagnostic:
     """Class for reporting diagnostics and errors."""
 
     def __init__(self):
-        super().__init__()
         self.errors = []
 
     def log_error(self, msg):

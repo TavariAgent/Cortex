@@ -127,20 +127,192 @@ class MathEngine(ABC):
 class BasicArithmeticEngine(MathEngine):
     """Handles basic arithmetic: sub, mul, div, pow. Uses built-in math where possible, falls back to Decimal/mpmath."""
 
-    def compute(self, expr):
-        pass
+    def __init__(self, segment_manager):
+        super().__init__(segment_manager)
+        self.traceback_info = []  # For step-wise debug info
 
-    def __sub__(self, other):
-        pass
+    def _add_traceback(self, step, info):
+        """Add step-wise traceback for debugging."""
+        self.traceback_info.append({
+            'step': step,
+            'info': info,
+            'timestamp': asyncio.get_event_loop().time() if asyncio.get_event_loop().is_running() else 0
+        })
+
+    def compute(self, expr):
+        """Parse and compute simple arithmetic expressions like '2+3' or '3*4'.
+        
+        Uses mpmath for high precision computation, avoiding floats and Decimals as per guidelines.
+        Integrates with parallel flow and segment manager.
+        """
+        self._add_traceback('compute_start', f'Expression: {expr}')
+        
+        # Parse the expression
+        expr = expr.strip()
+        
+        # Check for addition
+        if '+' in expr:
+            parts = expr.split('+')
+            self._add_traceback('parse', f'Addition detected: {parts}')
+            left = parts[0].strip()
+            right = parts[1].strip()
+            
+            # Convert to mpmath for high precision
+            left_mp = mp.mpf(left)
+            right_mp = mp.mpf(right)
+            
+            self._add_traceback('conversion', f'Converted to mpmath: {left_mp}, {right_mp}')
+            
+            # Perform addition using mpmath
+            result = mp.fadd(left_mp, right_mp)
+            
+            self._add_traceback('computation', f'Result: {result}')
+            
+            # Send to segment manager
+            part_order = [{'part': 'result', 'value': str(result), 'bytes': str(result).encode('utf-8')}]
+            self.segment_manager.receive_part_order(
+                self.__class__.__name__,
+                f'add_{left}_{right}',
+                part_order
+            )
+            
+            return result
+            
+        # Check for multiplication
+        elif '*' in expr:
+            parts = expr.split('*')
+            self._add_traceback('parse', f'Multiplication detected: {parts}')
+            left = parts[0].strip()
+            right = parts[1].strip()
+            
+            # Convert to mpmath for high precision
+            left_mp = mp.mpf(left)
+            right_mp = mp.mpf(right)
+            
+            self._add_traceback('conversion', f'Converted to mpmath: {left_mp}, {right_mp}')
+            
+            # Perform multiplication using mpmath
+            result = mp.fmul(left_mp, right_mp)
+            
+            self._add_traceback('computation', f'Result: {result}')
+            
+            # Send to segment manager
+            part_order = [{'part': 'result', 'value': str(result), 'bytes': str(result).encode('utf-8')}]
+            self.segment_manager.receive_part_order(
+                self.__class__.__name__,
+                f'mul_{left}_{right}',
+                part_order
+            )
+            
+            return result
+        else:
+            # Just a number
+            self._add_traceback('parse', 'Single number')
+            result = mp.mpf(expr)
+            self._add_traceback('computation', f'Result: {result}')
+            return result
+
+    def __add__(self, other):
+        """Perform addition using mpmath for high precision.
+        
+        Overrides the base class to use mpmath instead of floats/Decimals.
+        Integrates with segment manager for parallel flow.
+        """
+        self._add_traceback('__add__', f'Adding {self} and {other}')
+        
+        # Convert to mpmath
+        if hasattr(self, '_value'):
+            self_val = mp.mpf(self._value)
+        else:
+            self_val = mp.mpf(0)
+            
+        if isinstance(other, (int, float, str)):
+            other_val = mp.mpf(other)
+        elif hasattr(other, '_value'):
+            other_val = mp.mpf(other._value)
+        else:
+            other_val = mp.mpf(0)
+        
+        self._add_traceback('conversion', f'Converted: self={self_val}, other={other_val}')
+        
+        # Perform addition using mpmath
+        result = mp.fadd(self_val, other_val)
+        
+        self._add_traceback('result', f'Addition result: {result}')
+        
+        # Send to segment manager
+        part_order = [{'part': 'add_result', 'value': str(result), 'bytes': str(result).encode('utf-8')}]
+        self.segment_manager.receive_part_order(
+            self.__class__.__name__,
+            f'add_op',
+            part_order
+        )
+        
+        # Return result wrapped in engine instance for chaining
+        new_engine = BasicArithmeticEngine(self.segment_manager)
+        new_engine._value = str(result)
+        new_engine.traceback_info = self.traceback_info.copy()
+        return new_engine
 
     def __mul__(self, other):
-        pass
+        """Perform multiplication using mpmath for high precision.
+        
+        Uses mpmath to avoid floats and Decimals as per guidelines.
+        Integrates with segment manager for parallel flow.
+        """
+        self._add_traceback('__mul__', f'Multiplying {self} and {other}')
+        
+        # Convert to mpmath
+        if hasattr(self, '_value'):
+            self_val = mp.mpf(self._value)
+        else:
+            self_val = mp.mpf(1)
+            
+        if isinstance(other, (int, float, str)):
+            other_val = mp.mpf(other)
+        elif hasattr(other, '_value'):
+            other_val = mp.mpf(other._value)
+        else:
+            other_val = mp.mpf(1)
+        
+        self._add_traceback('conversion', f'Converted: self={self_val}, other={other_val}')
+        
+        # Perform multiplication using mpmath
+        result = mp.fmul(self_val, other_val)
+        
+        self._add_traceback('result', f'Multiplication result: {result}')
+        
+        # Send to segment manager
+        part_order = [{'part': 'mul_result', 'value': str(result), 'bytes': str(result).encode('utf-8')}]
+        self.segment_manager.receive_part_order(
+            self.__class__.__name__,
+            f'mul_op',
+            part_order
+        )
+        
+        # Return result wrapped in engine instance for chaining
+        new_engine = BasicArithmeticEngine(self.segment_manager)
+        new_engine._value = str(result)
+        new_engine.traceback_info = self.traceback_info.copy()
+        return new_engine
+
+    def __sub__(self, other):
+        """Stub implementation for subtraction."""
+        self._add_traceback('__sub__', f'Subtracting {other} from {self}')
+        # TODO: Implement using mpmath
+        return self
 
     def __truediv__(self, other):
-        pass
+        """Stub implementation for division."""
+        self._add_traceback('__truediv__', f'Dividing {self} by {other}')
+        # TODO: Implement using mpmath
+        return self
 
     def __pow__(self, other):
-        pass
+        """Stub implementation for power."""
+        self._add_traceback('__pow__', f'Raising {self} to power {other}')
+        # TODO: Implement using mpmath
+        return self
 
     def _convert_and_pack(self, parts):
         """Override: Use Decimal for high precision in conversions."""
