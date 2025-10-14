@@ -5,7 +5,10 @@ Tests the __add__, __mul__, and compute methods with mpmath high precision.
 """
 
 import sys
-sys.path.insert(0, '/home/runner/work/Cortex/Cortex')
+import os
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from abc_engines import BasicArithmeticEngine
 from segment_manager import SegmentManager

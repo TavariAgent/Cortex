@@ -133,10 +133,17 @@ class BasicArithmeticEngine(MathEngine):
 
     def _add_traceback(self, step, info):
         """Add step-wise traceback for debugging."""
+        try:
+            loop = asyncio.get_running_loop()
+            timestamp = loop.time()
+        except RuntimeError:
+            # No running event loop
+            timestamp = 0
+        
         self.traceback_info.append({
             'step': step,
             'info': info,
-            'timestamp': asyncio.get_event_loop().time() if asyncio.get_event_loop().is_running() else 0
+            'timestamp': timestamp
         })
 
     def compute(self, expr):
@@ -153,9 +160,15 @@ class BasicArithmeticEngine(MathEngine):
         # Check for addition
         if '+' in expr:
             parts = expr.split('+')
+            if len(parts) < 2:
+                raise ValueError(f"Invalid addition expression: {expr}")
             self._add_traceback('parse', f'Addition detected: {parts}')
             left = parts[0].strip()
             right = parts[1].strip()
+            
+            # Validate inputs
+            if not left or not right:
+                raise ValueError(f"Empty operands in expression: {expr}")
             
             # Convert to mpmath for high precision
             left_mp = mp.mpf(left)
@@ -181,9 +194,15 @@ class BasicArithmeticEngine(MathEngine):
         # Check for multiplication
         elif '*' in expr:
             parts = expr.split('*')
+            if len(parts) < 2:
+                raise ValueError(f"Invalid multiplication expression: {expr}")
             self._add_traceback('parse', f'Multiplication detected: {parts}')
             left = parts[0].strip()
             right = parts[1].strip()
+            
+            # Validate inputs
+            if not left or not right:
+                raise ValueError(f"Empty operands in expression: {expr}")
             
             # Convert to mpmath for high precision
             left_mp = mp.mpf(left)

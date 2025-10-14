@@ -54,6 +54,35 @@ class Structure:
         }
         return snapshot
 
+class EngineWorker:
+    """Worker class for running engines in async context."""
+    
+    def __init__(self, engine_class, *args):
+        self.engine_class = engine_class
+        self.args = args
+        self.engine_instance = None
+    
+    async def run(self, task_config):
+        """Run the engine with given task configuration."""
+        # Create engine instance if needed
+        if self.engine_instance is None:
+            # Engines need segment_manager, create a stub if not provided
+            if self.args:
+                self.engine_instance = self.engine_class(*self.args)
+            else:
+                # Stub - in real use would need proper segment_manager
+                from segment_manager import SegmentManager
+                struct = Structure()
+                seg_mgr = SegmentManager(struct)
+                self.engine_instance = self.engine_class(seg_mgr)
+        
+        # Run the task
+        expr = task_config.get('expr', '')
+        if expr:
+            result = self.engine_instance.compute(expr)
+            return result
+        return None
+
 class ThreadedEngineManager:
     """Manages threaded execution of engines."""
 
