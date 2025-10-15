@@ -14,6 +14,7 @@ class MathEngine(ABC):
     def __init__(self, segment_manager):
         self.segment_manager = segment_manager
         self.parallel_tasks = []
+        self._cache = []  # Cache for packed bytes before sending to segment_manager
 
     @abstractmethod
     def compute(self, expr):
@@ -132,6 +133,7 @@ class BasicArithmeticEngine(MathEngine):
         super().__init__(segment_manager)
         self.traceback_info = []  # For step-wise debug info
         self._value = "0"  # Default value for chaining
+        # _cache is inherited from MathEngine
 
     def _add_traceback(self, step, info):
         """Add step-wise traceback for debugging."""
@@ -154,29 +156,67 @@ class BasicArithmeticEngine(MathEngine):
             raise ValueError(f"Invalid number format: {num_str}")
 
     def _tokenize(self, expr):
-        """Tokenize an arithmetic expression into numbers and operators.
+        """Tokenize an arithmetic expression into numbers, operators, and parentheses.
         
-        Returns a list of tokens where each token is either a number (as string) or an operator.
+        Handles:
+        - Parentheses (regular parens for nesting)
+        - Function parentheses (e.g., sin(), cos())
+        - Numbers and basic operators
+        
+        Operator ordering is delegated to Structure/priority map via SegmentManager._dropdown_assemble.
+        
+        Returns a list of tokens where each token is either a number (as string), an operator, 
+        a parenthesis, or a function name.
         Validates that each number has at most one decimal point.
         """
         tokens = []
         current_num = ""
+        current_func = ""
+        i = 0
         
-        for char in expr:
-            if char.isdigit() or char == '.':
+        while i < len(expr):
+            char = expr[i]
+            
+            # Check for function names (sin, cos, tan, etc.)
+            if char.isalpha():
+                current_func += char
+                # Look ahead to check if this is a function (followed by '(')
+                if i + 1 < len(expr) and expr[i + 1] == '(':
+                    # This is a function
+                    tokens.append(current_func)
+                    current_func = ""
+                elif i + 1 >= len(expr) or not expr[i + 1].isalpha():
+                    # End of function name but no '(' - treat as variable or error
+                    if current_func:
+                        tokens.append(current_func)
+                        current_func = ""
+            elif char.isdigit() or char == '.':
+                # Handle numbers
                 current_num += char
             elif char in '+-*/':
+                # Handle operators
                 if current_num:
                     # Validate and add the number
                     self._validate_number(current_num)
                     tokens.append(current_num)
                     current_num = ""
-                elif not tokens:
-                    # Expression starts with an operator (invalid)
-                    raise ValueError(f"Expression cannot start with operator: {char}")
-                elif tokens[-1] in '+-*/':
-                    # Last token is also an operator - consecutive operators (invalid)
-                    raise ValueError(f"Consecutive operators not allowed: {tokens[-1]}{char}")
+                elif current_func:
+                    # Function name without parentheses before operator
+                    tokens.append(current_func)
+                    current_func = ""
+                    
+                tokens.append(char)
+            elif char in '()':
+                # Handle parentheses (regular and function parens)
+                if current_num:
+                    # Validate and add the number
+                    self._validate_number(current_num)
+                    tokens.append(current_num)
+                    current_num = ""
+                elif current_func:
+                    # This shouldn't happen as we handle functions above
+                    tokens.append(current_func)
+                    current_func = ""
                 tokens.append(char)
             elif char == ' ':
                 # Skip spaces
@@ -185,17 +225,22 @@ class BasicArithmeticEngine(MathEngine):
                     self._validate_number(current_num)
                     tokens.append(current_num)
                     current_num = ""
+                elif current_func:
+                    # Space after function name
+                    tokens.append(current_func)
+                    current_func = ""
             else:
                 raise ValueError(f"Invalid character in expression: {char}")
+            
+            i += 1
         
-        # Add last number if exists
+        # Add last number or function if exists
         if current_num:
             # Validate number format
             self._validate_number(current_num)
             tokens.append(current_num)
-        elif tokens and tokens[-1] in '+-*/':
-            # Expression ends with operator (invalid)
-            raise ValueError(f"Expression cannot end with operator: {tokens[-1]}")
+        elif current_func:
+            tokens.append(current_func)
         
         return tokens
 
@@ -319,8 +364,18 @@ class BasicArithmeticEngine(MathEngine):
 
         self._add_traceback('result', f'Addition result: {result}')
 
-        # Send to segment manager
-        part_order = [{'part': 'add_result', 'value': str(result), 'bytes': str(result).encode('utf-8')}]
+        # Pack result as bytes and accumulate in cache
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        
+        # Send packed bytes to segment manager
+        self.segment_manager.receive_packed_segment(
+            self.__class__.__name__,
+            packed_bytes
+        )
+
+        # Send to segment manager (original behavior for compatibility)
+        part_order = [{'part': 'add_result', 'value': str(result), 'bytes': packed_bytes}]
         self.segment_manager.receive_part_order(
             self.__class__.__name__,
             f'add_op',
@@ -331,6 +386,7 @@ class BasicArithmeticEngine(MathEngine):
         new_engine = BasicArithmeticEngine(self.segment_manager)
         new_engine._value = str(result)
         new_engine.traceback_info = self.traceback_info.copy()
+        new_engine._cache = self._cache.copy()  # Propagate cache
         return new_engine
 
     def __mul__(self, other):
@@ -352,8 +408,18 @@ class BasicArithmeticEngine(MathEngine):
 
         self._add_traceback('result', f'Multiplication result: {result}')
 
-        # Send to segment manager
-        part_order = [{'part': 'mul_result', 'value': str(result), 'bytes': str(result).encode('utf-8')}]
+        # Pack result as bytes and accumulate in cache
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        
+        # Send packed bytes to segment manager
+        self.segment_manager.receive_packed_segment(
+            self.__class__.__name__,
+            packed_bytes
+        )
+
+        # Send to segment manager (original behavior for compatibility)
+        part_order = [{'part': 'mul_result', 'value': str(result), 'bytes': packed_bytes}]
         self.segment_manager.receive_part_order(
             self.__class__.__name__,
             f'mul_op',
@@ -364,6 +430,7 @@ class BasicArithmeticEngine(MathEngine):
         new_engine = BasicArithmeticEngine(self.segment_manager)
         new_engine._value = str(result)
         new_engine.traceback_info = self.traceback_info.copy()
+        new_engine._cache = self._cache.copy()  # Propagate cache
         return new_engine
 
     def __sub__(self, other):
