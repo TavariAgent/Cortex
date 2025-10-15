@@ -148,6 +148,11 @@ class BasicArithmeticEngine(MathEngine):
             'timestamp': timestamp
         })
 
+    def _validate_number(self, num_str):
+        """Validate a number string has at most one decimal point."""
+        if num_str.count('.') > 1:
+            raise ValueError(f"Invalid number format: {num_str}")
+
     def _tokenize(self, expr):
         """Tokenize an arithmetic expression into numbers and operators.
         
@@ -162,24 +167,22 @@ class BasicArithmeticEngine(MathEngine):
                 current_num += char
             elif char in '+-*/':
                 if current_num:
-                    # Validate number format (only one decimal point)
-                    if current_num.count('.') > 1:
-                        raise ValueError(f"Invalid number format: {current_num}")
+                    # Validate and add the number
+                    self._validate_number(current_num)
                     tokens.append(current_num)
                     current_num = ""
                 elif not tokens:
                     # Expression starts with an operator (invalid)
                     raise ValueError(f"Expression cannot start with operator: {char}")
-                else:
-                    # Consecutive operators (invalid)
+                elif tokens[-1] in '+-*/':
+                    # Last token is also an operator - consecutive operators (invalid)
                     raise ValueError(f"Consecutive operators not allowed: {tokens[-1]}{char}")
                 tokens.append(char)
             elif char == ' ':
                 # Skip spaces
                 if current_num:
-                    # Validate number format before adding
-                    if current_num.count('.') > 1:
-                        raise ValueError(f"Invalid number format: {current_num}")
+                    # Validate and add the number
+                    self._validate_number(current_num)
                     tokens.append(current_num)
                     current_num = ""
             else:
@@ -188,8 +191,7 @@ class BasicArithmeticEngine(MathEngine):
         # Add last number if exists
         if current_num:
             # Validate number format
-            if current_num.count('.') > 1:
-                raise ValueError(f"Invalid number format: {current_num}")
+            self._validate_number(current_num)
             tokens.append(current_num)
         elif tokens and tokens[-1] in '+-*/':
             # Expression ends with operator (invalid)
