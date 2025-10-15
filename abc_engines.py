@@ -7,6 +7,7 @@ import mpmath as mp
 from decimal import Decimal
 from segment_manager import SegmentManager
 
+
 class MathEngine(ABC):
     """Abstract base class for all math engines. Enables parallel computation with priority-flow helpers."""
 
@@ -60,7 +61,7 @@ class MathEngine(ABC):
         return final_results
 
     async def _compute_single_part(self, part):
-        """Stub: Compute a single part, respecting priorities."""
+        """Stub: Compute single part, respecting priorities."""
         if 'nest' in str(part):
             return f"nested_{part}"
         return part * 2
@@ -100,7 +101,7 @@ class MathEngine(ABC):
         # Stub: Default conversion logic
         byte_arrays = []
         for part in parts:
-            if isinstance(part, (int, float)):
+            if isinstance(part, int):
                 # Convert to byte string (big-endian, with liberal allocation)
                 byte_str = str(part).encode('utf-8')
                 byte_arrays.append(bytearray(byte_str))
@@ -130,6 +131,7 @@ class BasicArithmeticEngine(MathEngine):
     def __init__(self, segment_manager):
         super().__init__(segment_manager)
         self.traceback_info = []  # For step-wise debug info
+        self._value = "0"  # Default value for chaining
 
     def _add_traceback(self, step, info):
         """Add step-wise traceback for debugging."""
@@ -139,7 +141,7 @@ class BasicArithmeticEngine(MathEngine):
         except RuntimeError:
             # No running event loop
             timestamp = 0
-        
+
         self.traceback_info.append({
             'step': step,
             'info': info,
@@ -148,15 +150,18 @@ class BasicArithmeticEngine(MathEngine):
 
     def compute(self, expr):
         """Parse and compute simple arithmetic expressions like '2+3' or '3*4'.
-        
+
         Uses mpmath for high precision computation, avoiding floats and Decimals as per guidelines.
         Integrates with parallel flow and segment manager.
         """
         self._add_traceback('compute_start', f'Expression: {expr}')
-        
+
+        # Set high precision
+        mp.dps = 50
+
         # Parse the expression
         expr = expr.strip()
-        
+
         # Check for addition
         if '+' in expr:
             parts = expr.split('+')
@@ -165,22 +170,22 @@ class BasicArithmeticEngine(MathEngine):
             self._add_traceback('parse', f'Addition detected: {parts}')
             left = parts[0].strip()
             right = parts[1].strip()
-            
+
             # Validate inputs
             if not left or not right:
                 raise ValueError(f"Empty operands in expression: {expr}")
-            
+
             # Convert to mpmath for high precision
             left_mp = mp.mpf(left)
             right_mp = mp.mpf(right)
-            
+
             self._add_traceback('conversion', f'Converted to mpmath: {left_mp}, {right_mp}')
-            
+
             # Perform addition using mpmath
-            result = mp.fadd(left_mp, right_mp)
-            
+            result = left_mp + right_mp
+
             self._add_traceback('computation', f'Result: {result}')
-            
+
             # Send to segment manager
             part_order = [{'part': 'result', 'value': str(result), 'bytes': str(result).encode('utf-8')}]
             self.segment_manager.receive_part_order(
@@ -188,9 +193,9 @@ class BasicArithmeticEngine(MathEngine):
                 f'add_{left}_{right}',
                 part_order
             )
-            
-            return result
-            
+
+            return str(result)  # Return string to avoid float comparisons
+
         # Check for multiplication
         elif '*' in expr:
             parts = expr.split('*')
@@ -199,22 +204,22 @@ class BasicArithmeticEngine(MathEngine):
             self._add_traceback('parse', f'Multiplication detected: {parts}')
             left = parts[0].strip()
             right = parts[1].strip()
-            
+
             # Validate inputs
             if not left or not right:
                 raise ValueError(f"Empty operands in expression: {expr}")
-            
+
             # Convert to mpmath for high precision
             left_mp = mp.mpf(left)
             right_mp = mp.mpf(right)
-            
+
             self._add_traceback('conversion', f'Converted to mpmath: {left_mp}, {right_mp}')
-            
+
             # Perform multiplication using mpmath
-            result = mp.fmul(left_mp, right_mp)
-            
+            result = left_mp * right_mp
+
             self._add_traceback('computation', f'Result: {result}')
-            
+
             # Send to segment manager
             part_order = [{'part': 'result', 'value': str(result), 'bytes': str(result).encode('utf-8')}]
             self.segment_manager.receive_part_order(
@@ -222,43 +227,34 @@ class BasicArithmeticEngine(MathEngine):
                 f'mul_{left}_{right}',
                 part_order
             )
-            
-            return result
+
+            return str(result)  # Return string to avoid float comparisons
         else:
             # Just a number
             self._add_traceback('parse', 'Single number')
             result = mp.mpf(expr)
             self._add_traceback('computation', f'Result: {result}')
-            return result
+            return str(result)
 
     def __add__(self, other):
         """Perform addition using mpmath for high precision.
-        
+
         Overrides the base class to use mpmath instead of floats/Decimals.
         Integrates with segment manager for parallel flow.
         """
-        self._add_traceback('__add__', f'Adding {self} and {other}')
-        
+        self._add_traceback('__add__', f'Adding {self._value} and {other}')
+
         # Convert to mpmath
-        if hasattr(self, '_value'):
-            self_val = mp.mpf(self._value)
-        else:
-            self_val = mp.mpf(0)
-            
-        if isinstance(other, (int, float, str)):
-            other_val = mp.mpf(other)
-        elif hasattr(other, '_value'):
-            other_val = mp.mpf(other._value)
-        else:
-            other_val = mp.mpf(0)
-        
+        self_val = mp.mpf(self._value)
+        other_val = mp.mpf(str(other))
+
         self._add_traceback('conversion', f'Converted: self={self_val}, other={other_val}')
-        
+
         # Perform addition using mpmath
-        result = mp.fadd(self_val, other_val)
-        
+        result = self_val + other_val
+
         self._add_traceback('result', f'Addition result: {result}')
-        
+
         # Send to segment manager
         part_order = [{'part': 'add_result', 'value': str(result), 'bytes': str(result).encode('utf-8')}]
         self.segment_manager.receive_part_order(
@@ -266,7 +262,7 @@ class BasicArithmeticEngine(MathEngine):
             f'add_op',
             part_order
         )
-        
+
         # Return result wrapped in engine instance for chaining
         new_engine = BasicArithmeticEngine(self.segment_manager)
         new_engine._value = str(result)
@@ -275,32 +271,23 @@ class BasicArithmeticEngine(MathEngine):
 
     def __mul__(self, other):
         """Perform multiplication using mpmath for high precision.
-        
+
         Uses mpmath to avoid floats and Decimals as per guidelines.
         Integrates with segment manager for parallel flow.
         """
-        self._add_traceback('__mul__', f'Multiplying {self} and {other}')
-        
+        self._add_traceback('__mul__', f'Multiplying {self._value} and {other}')
+
         # Convert to mpmath
-        if hasattr(self, '_value'):
-            self_val = mp.mpf(self._value)
-        else:
-            self_val = mp.mpf(1)
-            
-        if isinstance(other, (int, float, str)):
-            other_val = mp.mpf(other)
-        elif hasattr(other, '_value'):
-            other_val = mp.mpf(other._value)
-        else:
-            other_val = mp.mpf(1)
-        
+        self_val = mp.mpf(self._value)
+        other_val = mp.mpf(str(other))
+
         self._add_traceback('conversion', f'Converted: self={self_val}, other={other_val}')
-        
+
         # Perform multiplication using mpmath
-        result = mp.fmul(self_val, other_val)
-        
+        result = self_val * other_val
+
         self._add_traceback('result', f'Multiplication result: {result}')
-        
+
         # Send to segment manager
         part_order = [{'part': 'mul_result', 'value': str(result), 'bytes': str(result).encode('utf-8')}]
         self.segment_manager.receive_part_order(
@@ -308,7 +295,7 @@ class BasicArithmeticEngine(MathEngine):
             f'mul_op',
             part_order
         )
-        
+
         # Return result wrapped in engine instance for chaining
         new_engine = BasicArithmeticEngine(self.segment_manager)
         new_engine._value = str(result)
@@ -317,29 +304,29 @@ class BasicArithmeticEngine(MathEngine):
 
     def __sub__(self, other):
         """Stub implementation for subtraction."""
-        self._add_traceback('__sub__', f'Subtracting {other} from {self}')
+        self._add_traceback('__sub__', f'Subtracting {other} from {self._value}')
         # TODO: Implement using mpmath
         return self
 
     def __truediv__(self, other):
         """Stub implementation for division."""
-        self._add_traceback('__truediv__', f'Dividing {self} by {other}')
+        self._add_traceback('__truediv__', f'Dividing {self._value} by {other}')
         # TODO: Implement using mpmath
         return self
 
     def __pow__(self, other):
         """Stub implementation for power."""
-        self._add_traceback('__pow__', f'Raising {self} to power {other}')
+        self._add_traceback('__pow__', f'Raising {self._value} to power {other}')
         # TODO: Implement using mpmath
         return self
 
     def _convert_and_pack(self, parts):
-        """Override: Use Decimal for high precision in conversions."""
+        """Override: Use str conversions to avoid floats."""
         packed = super()._convert_and_pack(parts)
-        # Additional: Ensure Decimal packing
-        decimal_parts = [Decimal(str(p)) for p in parts if isinstance(p, (int, float))]
-        if decimal_parts:
-            packed.extend(b'DECIMAL_PACK:' + str(sum(decimal_parts)).encode('utf-8'))
+        # Additional: Ensure str packing (no Decimal/float here)
+        str_parts = [str(p) for p in parts if isinstance(p, int)]
+        if str_parts:
+            packed.extend(b'STR_PACK:' + ','.join(str_parts).encode('utf-8'))
         return packed
 
 
@@ -367,7 +354,7 @@ class TrigonometryEngine(MathEngine):
         # Additional: Pre-pack trig-specific (e.g., convert to radians)
         for part in parts:
             if 'deg' in str(part):  # Assume degrees marker
-                rad = math.radians(float(str(part).replace('deg', '')))
+                rad = mp.radians(mp.mpf(str(part).replace('deg', '')))
                 packed.extend(bytearray(str(rad).encode('utf-8')))
         return packed
 
