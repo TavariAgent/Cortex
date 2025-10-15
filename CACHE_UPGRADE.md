@@ -7,12 +7,12 @@ This document describes the enhancements made to the SegmentManager and Engine c
 ## Changes to SegmentManager (segment_manager.py)
 
 ### 1. Added segment_pools
-- **Type**: `dict` (engine_name -> list of packed byte arrays)
+- **Type**: `Dict[str, List[bytes]]` (engine_name -> list of packed bytes)
 - **Purpose**: Store packed byte arrays from engines for cache-driven processing
 - **Location**: Initialized in `__init__`
 
 ### 2. Added completion_flags
-- **Type**: `dict` (engine_name -> bool)
+- **Type**: `Dict[str, bool]` (engine_name -> bool)
 - **Purpose**: Track completion status of each engine
 - **Location**: Initialized in `__init__`
 
@@ -60,7 +60,7 @@ def __init__(self, segment_manager):
     self.parallel_tasks = []
     self._cache = []  # Cache for packed bytes before sending to segment_manager
 ```
-- **Type**: `list` of byte arrays
+- **Type**: `List[bytes]`
 - **Purpose**: Accumulate packed bytes before sending to segment_manager
 - **Inheritance**: Available to all engine subclasses
 
