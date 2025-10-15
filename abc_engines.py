@@ -148,9 +148,107 @@ class BasicArithmeticEngine(MathEngine):
             'timestamp': timestamp
         })
 
-    def compute(self, expr):
-        """Parse and compute simple arithmetic expressions like '2+3' or '3*4'.
+    def _tokenize(self, expr):
+        """Tokenize an arithmetic expression into numbers and operators.
+        
+        Returns a list of tokens where each token is either a number (as string) or an operator.
+        """
+        tokens = []
+        current_num = ""
+        
+        for char in expr:
+            if char.isdigit() or char == '.':
+                current_num += char
+            elif char in '+-*/':
+                if current_num:
+                    tokens.append(current_num)
+                    current_num = ""
+                tokens.append(char)
+            elif char == ' ':
+                # Skip spaces
+                if current_num:
+                    tokens.append(current_num)
+                    current_num = ""
+            else:
+                raise ValueError(f"Invalid character in expression: {char}")
+        
+        # Add last number if exists
+        if current_num:
+            tokens.append(current_num)
+        
+        return tokens
 
+    def _evaluate_tokens(self, tokens):
+        """Evaluate tokenized expression following PEMDAS order of operations.
+        
+        Processes multiplication and division first (left-to-right), 
+        then addition and subtraction (left-to-right).
+        Uses mpmath for all calculations.
+        """
+        if not tokens:
+            raise ValueError("Empty token list")
+        
+        # Convert to list to allow modification
+        tokens = list(tokens)
+        
+        self._add_traceback('tokens', f'Initial tokens: {tokens}')
+        
+        # First pass: Handle multiplication and division (left to right)
+        i = 0
+        while i < len(tokens):
+            if i > 0 and i < len(tokens) and tokens[i] in ['*', '/']:
+                operator = tokens[i]
+                left = mp.mpf(tokens[i-1])
+                right = mp.mpf(tokens[i+1])
+                
+                if operator == '*':
+                    result = left * right
+                    self._add_traceback('multiply', f'{left} * {right} = {result}')
+                else:  # division
+                    result = left / right
+                    self._add_traceback('divide', f'{left} / {right} = {result}')
+                
+                # Replace the three tokens (left, op, right) with result
+                tokens = tokens[:i-1] + [str(result)] + tokens[i+2:]
+                # Don't increment i, check same position again
+            else:
+                i += 1
+        
+        self._add_traceback('after_mul_div', f'After mul/div: {tokens}')
+        
+        # Second pass: Handle addition and subtraction (left to right)
+        i = 0
+        while i < len(tokens):
+            if i > 0 and i < len(tokens) and tokens[i] in ['+', '-']:
+                operator = tokens[i]
+                left = mp.mpf(tokens[i-1])
+                right = mp.mpf(tokens[i+1])
+                
+                if operator == '+':
+                    result = left + right
+                    self._add_traceback('add', f'{left} + {right} = {result}')
+                else:  # subtraction
+                    result = left - right
+                    self._add_traceback('subtract', f'{left} - {right} = {result}')
+                
+                # Replace the three tokens with result
+                tokens = tokens[:i-1] + [str(result)] + tokens[i+2:]
+                # Don't increment i, check same position again
+            else:
+                i += 1
+        
+        self._add_traceback('after_add_sub', f'Final tokens: {tokens}')
+        
+        # Should have exactly one token left - the result
+        if len(tokens) != 1:
+            raise ValueError(f"Invalid expression evaluation, tokens remaining: {tokens}")
+        
+        return mp.mpf(tokens[0])
+
+    def compute(self, expr):
+        """Parse and compute arithmetic expressions with full PEMDAS support.
+
+        Supports: +, -, *, / with proper order of operations.
         Uses mpmath for high precision computation, avoiding floats and Decimals as per guidelines.
         Integrates with parallel flow and segment manager.
         """
@@ -161,80 +259,25 @@ class BasicArithmeticEngine(MathEngine):
 
         # Parse the expression
         expr = expr.strip()
+        
+        # Tokenize the expression
+        tokens = self._tokenize(expr)
+        self._add_traceback('tokenize', f'Tokens: {tokens}')
+        
+        # Evaluate with PEMDAS
+        result = self._evaluate_tokens(tokens)
+        
+        self._add_traceback('computation', f'Final result: {result}')
 
-        # Check for addition
-        if '+' in expr:
-            parts = expr.split('+')
-            if len(parts) < 2:
-                raise ValueError(f"Invalid addition expression: {expr}")
-            self._add_traceback('parse', f'Addition detected: {parts}')
-            left = parts[0].strip()
-            right = parts[1].strip()
+        # Send to segment manager
+        part_order = [{'part': 'result', 'value': str(result), 'bytes': str(result).encode('utf-8')}]
+        self.segment_manager.receive_part_order(
+            self.__class__.__name__,
+            f'compute_{expr.replace(" ", "")}',
+            part_order
+        )
 
-            # Validate inputs
-            if not left or not right:
-                raise ValueError(f"Empty operands in expression: {expr}")
-
-            # Convert to mpmath for high precision
-            left_mp = mp.mpf(left)
-            right_mp = mp.mpf(right)
-
-            self._add_traceback('conversion', f'Converted to mpmath: {left_mp}, {right_mp}')
-
-            # Perform addition using mpmath
-            result = left_mp + right_mp
-
-            self._add_traceback('computation', f'Result: {result}')
-
-            # Send to segment manager
-            part_order = [{'part': 'result', 'value': str(result), 'bytes': str(result).encode('utf-8')}]
-            self.segment_manager.receive_part_order(
-                self.__class__.__name__,
-                f'add_{left}_{right}',
-                part_order
-            )
-
-            return str(result)  # Return string to avoid float comparisons
-
-        # Check for multiplication
-        elif '*' in expr:
-            parts = expr.split('*')
-            if len(parts) < 2:
-                raise ValueError(f"Invalid multiplication expression: {expr}")
-            self._add_traceback('parse', f'Multiplication detected: {parts}')
-            left = parts[0].strip()
-            right = parts[1].strip()
-
-            # Validate inputs
-            if not left or not right:
-                raise ValueError(f"Empty operands in expression: {expr}")
-
-            # Convert to mpmath for high precision
-            left_mp = mp.mpf(left)
-            right_mp = mp.mpf(right)
-
-            self._add_traceback('conversion', f'Converted to mpmath: {left_mp}, {right_mp}')
-
-            # Perform multiplication using mpmath
-            result = left_mp * right_mp
-
-            self._add_traceback('computation', f'Result: {result}')
-
-            # Send to segment manager
-            part_order = [{'part': 'result', 'value': str(result), 'bytes': str(result).encode('utf-8')}]
-            self.segment_manager.receive_part_order(
-                self.__class__.__name__,
-                f'mul_{left}_{right}',
-                part_order
-            )
-
-            return str(result)  # Return string to avoid float comparisons
-        else:
-            # Just a number
-            self._add_traceback('parse', 'Single number')
-            result = mp.mpf(expr)
-            self._add_traceback('computation', f'Result: {result}')
-            return str(result)
+        return str(result)  # Return string to avoid float comparisons
 
     def __add__(self, other):
         """Perform addition using mpmath for high precision.
