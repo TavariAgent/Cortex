@@ -1,8 +1,8 @@
-from inspect import trace as trace_func
 import asyncio
 from collections import defaultdict
-from abc_engines import MathEngine, BasicArithmeticEngine, TrigonometryEngine
-from xor_sub_dirs import XorSubDirectory # Awaiting integration
+
+from abc_engines import BasicArithmeticEngine
+
 
 class StageTracer:
     """Class for tracing the execution of the expression."""
@@ -229,26 +229,3 @@ if __name__ == '__main__':
 
     # Add engines to manager
     manager.add_engine('basic', BasicArithmeticEngine)
-    manager.add_engine('trig', TrigonometryEngine)
-
-    # Simulate flow
-    async def run():
-        snapshot = await struct._inform_structure()
-        print(f"Structure: {snapshot}")
-        xor_dirs = compiler ^ None  # Create pools
-        print(f"XOR pools created: {list(compiler.segment_pools.keys())}")
-        # Simulate engine tasks
-        tasks = {'basic': {'expr': '2+3'}, 'trig': {'expr': 'sin(pi)'}}
-        await manager.run_engines(tasks)
-        # Simulate __add__ with segments
-        mock_segments = [
-            {'engine': 'basic', 'id': 'seg1', 'bytes': b'5'},
-            {'engine': 'trig', 'id': 'seg2', 'bytes': b'0.0'}
-        ]
-        result = compiler + type('Mock', (), {'segments': mock_segments})()
-        print(f"__add__ result: {result}")
-        # Finalize
-        final = await compute._compute_expression()
-        print(f"Final result: {final}")
-
-    asyncio.run(run())

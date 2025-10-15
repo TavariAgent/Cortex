@@ -73,8 +73,24 @@ def test_deep_expressions():
         for trace in engine.traceback_info[-10:]:
             print(f"  {trace['step']}: {trace['info']}")
 
+    #Test 4: 4-layer with exponents and addition
+    expr4 = "(((2**3)-5)+1)**2"
+    expected4 = 16.0  # ((8-5)+1)**2 = 4**2 = 16
+    print(f"\nTest 4: {expr4}")
+    print("-" * 40)
+    result4 = engine.compute(expr4)
+    success4 = abs(float(result4) - expected4) < 1e-10
+    print(f"Result: {result4}")
+    print(f"Expected: {expected4}")
+    print(f"Success: {success4}")
+
+    if not success4:
+        print("Traceback:")
+        for trace in engine.traceback_info[-10:]:
+            print(f"  {trace['step']}: {trace['info']}")
+
     # Overall success
-    all_success = success1 and success2 and success3
+    all_success = success1 and success2 and success3 and success4
     print("\n" + "=" * 80)
     if all_success:
         print("All deep expression tests PASSED!")

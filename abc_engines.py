@@ -244,7 +244,7 @@ class BasicArithmeticEngine(MathEngine):
         return processed
 
     def _evaluate_slice(self, slice_expr):
-        """Evaluate a slice's inner expression with functions, parens, and PEMDAS."""
+        """Evaluate a slice's inner expression with functions, parens, and full PEMDAS including exponents."""
         # First, handle functions by replacing with computed values
         for func in ['sin', 'cos', 'tan', 'log', 'sqrt']:
             func_call = f"{func}("
@@ -263,6 +263,9 @@ class BasicArithmeticEngine(MathEngine):
                 func_token = slice_expr[start:j]
                 replaced = self.quick_unpack_function(func_token)
                 slice_expr = slice_expr[:start] + replaced + slice_expr[j:]
+
+        # Replace '**' with '^' for internal power handling
+        slice_expr = slice_expr.replace('**', '^')
 
         # Then handle parentheses recursively
         while '(' in slice_expr:
@@ -287,7 +290,7 @@ class BasicArithmeticEngine(MathEngine):
         for char in slice_expr:
             if char.isdigit() or char == '.':
                 current += char
-            elif char in '+-*/':
+            elif char in '+-*/^':  # Include ^ for exponents
                 if current:
                     sub_tokens.append(current)
                     current = ""
@@ -297,8 +300,21 @@ class BasicArithmeticEngine(MathEngine):
         if current:
             sub_tokens.append(current)
 
-        # Apply PEMDAS: first * /, then + -
+        # Apply PEMDAS: first ^, then * /, then + -
         tokens = sub_tokens[:]
+
+        # Exponents (^) first
+        i = 0
+        while i < len(tokens):
+            if i > 0 and tokens[i] == '^' and i + 1 < len(tokens):
+                left = mp.mpf(tokens[i - 1])
+                right = mp.mpf(tokens[i + 1])
+                result = mp.power(left, right)
+                tokens = tokens[:i - 1] + [str(result)] + tokens[i + 2:]
+            else:
+                i += 1
+
+        # Then multiplication and division
         i = 0
         while i < len(tokens):
             if i > 0 and tokens[i] in ['*', '/'] and i + 1 < len(tokens):
@@ -310,6 +326,7 @@ class BasicArithmeticEngine(MathEngine):
             else:
                 i += 1
 
+        # Then addition and subtraction
         i = 0
         while i < len(tokens):
             if i > 0 and tokens[i] in ['+', '-'] and i + 1 < len(tokens):
@@ -542,10 +559,90 @@ class BasicArithmeticEngine(MathEngine):
         return new_engine
 
     def __sub__(self, other):
-        """Stub implementation for subtraction."""
+        """Perform subtraction using mpmath for high precision.
+
+        Integrates with segment manager for parallel flow.
+        """
         self._add_traceback('__sub__', f'Subtracting {other} from {self._value}')
-        # TODO: Implement using mpmath
-        return self
+
+        # Convert to mpmath
+        self_val = mp.mpf(self._value)
+        other_val = mp.mpf(str(other))
+
+        self._add_traceback('conversion', f'Converted: self={self_val}, other={other_val}')
+
+        # Perform subtraction using mpmath
+        result = self_val - other_val
+
+        self._add_traceback('result', f'Subtraction result: {result}')
+
+        # Pack result as bytes and accumulate in cache
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+
+        # Send packed bytes to segment manager
+        self.segment_manager.receive_packed_segment(
+            self.__class__.__name__,
+            packed_bytes
+        )
+
+        # Send to segment manager
+        part_order = [{'part': 'sub_result', 'value': str(result), 'bytes': packed_bytes}]
+        self.segment_manager.receive_part_order(
+            self.__class__.__name__,
+            f'sub_op',
+            part_order
+        )
+
+        # Return result wrapped in engine instance for chaining
+        new_engine = BasicArithmeticEngine(self.segment_manager)
+        new_engine._value = str(result)
+        new_engine.traceback_info = self.traceback_info.copy()
+        new_engine._cache = self._cache.copy()  # Propagate cache
+        return new_engine
+
+    def __pow__(self, other):
+        """Perform exponentiation using mpmath for high precision.
+
+        Integrates with segment manager for parallel flow.
+        """
+        self._add_traceback('__pow__', f'Raising {self._value} to power {other}')
+
+        # Convert to mpmath
+        self_val = mp.mpf(self._value)
+        other_val = mp.mpf(str(other))
+
+        self._add_traceback('conversion', f'Converted: self={self_val}, other={other_val}')
+
+        # Perform exponentiation using mpmath
+        result = mp.power(self_val, other_val)
+
+        self._add_traceback('result', f'Power result: {result}')
+
+        # Pack result as bytes and accumulate in cache
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+
+        # Send packed bytes to segment manager
+        self.segment_manager.receive_packed_segment(
+            self.__class__.__name__,
+            packed_bytes
+        )
+
+        # Send to segment manager
+        part_order = [{'part': 'pow_result', 'value': str(result), 'bytes': packed_bytes}]
+        self.segment_manager.receive_part_order(
+            self.__class__.__name__,
+            f'pow_op',
+            part_order
+        )
+
+        # Return result wrapped in engine instance for chaining
+        new_engine = BasicArithmeticEngine(self.segment_manager)
+        new_engine._value = str(result)
+        new_engine.traceback_info = self.traceback_info.copy()
+        new_engine._cache = self._cache.copy()  # Propagate cache
+        return new_engine
 
     def __div__(self, other):
         """Custom division using mpmath for high precision (deprecated but precise).
@@ -598,12 +695,6 @@ class BasicArithmeticEngine(MathEngine):
 
         return div_func
 
-    def __pow__(self, other):
-        """Stub implementation for power."""
-        self._add_traceback('__pow__', f'Raising {self._value} to power {other}')
-        # TODO: Implement using mpmath
-        return self
-
     def _convert_and_pack(self, parts):
         """Override: Use str conversions to avoid floats."""
         packed = super()._convert_and_pack(parts)
@@ -611,84 +702,4 @@ class BasicArithmeticEngine(MathEngine):
         str_parts = [str(p) for p in parts if isinstance(p, int)]
         if str_parts:
             packed.extend(b'STR_PACK:' + ','.join(str_parts).encode('utf-8'))
-        return packed
-
-
-class TrigonometryEngine(MathEngine):
-    """Handles trig functions: sin, cos, tan, etc. Implements dunders where ops apply."""
-
-    def compute(self, expr):
-        pass
-
-    def __sub__(self, other):
-        pass
-
-    def __mul__(self, other):
-        pass
-
-    def sin(self, x):
-        pass
-
-    def cos(self, x):
-        pass
-
-    def _convert_and_pack(self, parts):
-        """Override: Handle angle/radian conversions for trig."""
-        packed = super()._convert_and_pack(parts)
-        # Additional: Pre-pack trig-specific (e.g., convert to radians)
-        for part in parts:
-            if 'deg' in str(part):  # Assume degrees marker
-                rad = mp.radians(mp.mpf(str(part).replace('deg', '')))
-                packed.extend(bytearray(str(rad).encode('utf-8')))
-        return packed
-
-
-class ComplexAlgebraEngine(MathEngine):
-    """Handles complex numbers: real + imag*j. Overloads for complex ops."""
-
-    def compute(self, expr):
-        pass
-
-    def __sub__(self, other):
-        pass
-
-    def __mul__(self, other):
-        pass
-
-    def __pow__(self, other):
-        pass
-
-    def _convert_and_pack(self, parts):
-        """Override: Pack complex parts efficiently."""
-        # Use default but ensure complex handling
-        return super()._convert_and_pack(parts)
-
-
-class CalculusEngine(MathEngine):
-    """Handles derivatives, integrals, limits. Heavily relies on SymPy."""
-
-    def compute(self, expr):
-        pass
-
-    def __sub__(self, other):
-        pass
-
-    def __mul__(self, other):
-        pass
-
-    def derivative(self, f, var):
-        pass
-
-    def integral(self, f, var):
-        pass
-
-    def _convert_and_pack(self, parts):
-        """Override: Handle symbolic expressions for packing."""
-        packed = bytearray()
-        for part in parts:
-            if isinstance(part, sp.Expr):
-                # Convert SymPy expr to string bytes
-                packed.extend(bytearray(str(part).encode('utf-8')))
-            else:
-                packed.extend(super()._convert_and_pack([part]))
         return packed
