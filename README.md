@@ -1,28 +1,45 @@
 # Cortex Calculator
 
-A revolutionary calculator leveraging XOR dual-state management, parallel computation, and structure-defined assembly for massive speed and flexibility. No rigid PEMDAS—flows around priorities with left-to-right on same levels, dropdown nests, and byte-packing for efficiency.
-
-## Vision
-- Compute 100k+ decimals in seconds via parallel parts.
-- Open-source math engine for pi, e, trig, roots, polynomials, complex algebra, calculus, sums, limits, and more.
-- Modular engines (SymPy, NumPy, etc.) for full math coverage.
-- Paradigm: Parallel computation respecting primary levels, priority-flow helpers, and XOR pools.
+A modular, high-precision math calculator built with Python, supporting arithmetic, trigonometry, calculus, and complex algebra through specialized engines.
 
 ## Architecture
-- **main.py**: Core classes (Structure, XorStringCompiler, Compute, etc.) for tracing, compilation, and execution.
-- **abc_engines.py**: Base MathEngine with dunders, parallel helpers, and priority ordering.
-- **segment_manager.py**: Manages part orders, dropdown assembly, and structure integration.
-- **test_main.py**: Basic validation script.
-- **xor_sub_dirs.py**: XOR subdirectory helper for parallel execution.
 
-## Getting Started
-1. Run `python test_main.py` for a sample flow.
-2. Extend engines for new math ops.
-3. Contribute forks for more fields!
+- **Modular Engines**: Separate classes for different math domains (BasicArithmetic, Trigonometry, Calculus, ComplexAlgebra).
+- **Precision Flow**: Avoids floats via Decimal → str → mpmath conversions.
+- **Debugging**: Step-wise tracebacks for all operations.
+- **Caching**: XOR-gated LRU for dynamic, ephemeral non-static objects.
+- **Cross-Engine Communication**: call_helper for mixed symbolic/numeric expressions.
+
+## Practices
+
+- Double underscores (__add__, __mul__, etc.) for operator overloading.
+- Tracebacks integrated into all compute methods.
+- Modularization: New logic splits into dedicated engines.
+
+## Credits
+
+Built with GitHub Copilot. Code by BoneKEY (TavariAgent).
+
+## Usage
+
+```python
+from abc_engines import BasicArithmeticEngine
+engine = BasicArithmeticEngine(segment_manager)
+result = engine.compute('sin(3.14) + 2**3')
+```
 
 ## Roadmap
-- Pre-stub integrations for more math fields.
-- Integrate methods for more complex math.
-- Open-source release when useful.
+- Precision Flow for ...
+- Debugging for ...
+- Caching for ...
+- Cross-Engine Communication for ...
+- Complex Algebra
+- Complex Numbers
+- Complex Trigonometry
+- Complex Calculus
+- Complex Logarithms
+- Complex Exponentials
+- Complex Power
+- Complex Roots
 
-Built with AI assistance—let's compute the future!
+Built with AI assistance—let's compute for the future!

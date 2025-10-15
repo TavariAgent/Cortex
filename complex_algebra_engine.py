@@ -193,3 +193,32 @@ class ComplexAlgebraEngine(MathEngine):
         """Override: Pack complex parts efficiently."""
         # Use default but ensure complex handling
         return super()._convert_and_pack(parts)
+
+    def call_helper(self, expr):
+        """Dynamic helper: Route mixed expressions to appropriate engines and send results to segment_pools."""
+        # Determine engine based on keywords
+        if 'sin' in expr or 'cos' in expr or 'tan' in expr:
+            from trigonometry_engine import TrigonometryEngine
+            engine = TrigonometryEngine(self.segment_manager)
+        elif 'derivative' in expr or 'integral' in expr:
+            from calculus_engine import CalculusEngine
+            engine = CalculusEngine(self.segment_manager)
+        elif 'j' in expr or ('+' in expr and 'j' in expr):
+            engine = ComplexAlgebraEngine(self.segment_manager)
+        else:
+            # Default to basic arithmetic for numeric/symbolic mixes
+            from abc_engines import BasicArithmeticEngine
+            engine = BasicArithmeticEngine(self.segment_manager)
+
+        # Compute result
+        result = engine.compute(expr)
+
+        # Pack as mixed result (e.g., 'mixed:result') and send to segment_pools
+        mixed_packed = f"mixed:{result}".encode('utf-8')
+        self.segment_manager.receive_packed_segment('CallHelper', mixed_packed)
+
+        # Optional: Send part_order for deeper control
+        part_order = [{'part': 'mixed_result', 'value': str(result), 'bytes': mixed_packed}]
+        self.segment_manager.receive_part_order('CallHelper', f'mixed_{expr}', part_order)
+
+        return result

@@ -144,21 +144,41 @@ class TrigonometryEngine(MathEngine):
             'timestamp': timestamp
         })
 
+    @staticmethod
+    def snap_to_angle(arg):
+        """Snap arg to common angles for exact trig results (avoids mpmath approximations)."""
+        if abs(arg - 0) < 1e-10:
+            return 0
+        if abs(arg - mp.pi) < 1e-10:
+            return mp.pi
+        if abs(arg - mp.pi/2) < 1e-10:
+            return mp.pi/2
+        if abs(arg - mp.pi/4) < 1e-10:
+            return mp.pi/4
+        # Add more as needed (e.g., 2*pi, etc.)
+        return arg
+
     def compute(self, expr):
-        """Compute trig expressions, e.g., sin(3.14)."""
+        """Compute trig expressions with pi recognition and angle snapping."""
         self._add_traceback('compute_start', f'Expression: {expr}')
         mp.dps = 50
 
-        # Simple: assume expr is like 'sin(3.14)'
+        # Simple: assume expr is like 'cos(pi)'
         if 'sin(' in expr:
-            arg = expr.split('sin(')[1].rstrip(')')
-            result = mp.sin(mp.mpf(arg))
+            arg_str = expr.split('sin(')[1].rstrip(')')
+            arg = mp.pi if arg_str == 'pi' else mp.mpf(arg_str)
+            arg = self.snap_to_angle(arg)
+            result = mp.sin(arg)
         elif 'cos(' in expr:
-            arg = expr.split('cos(')[1].rstrip(')')
-            result = mp.cos(mp.mpf(arg))
+            arg_str = expr.split('cos(')[1].rstrip(')')
+            arg = mp.pi if arg_str == 'pi' else mp.mpf(arg_str)
+            arg = self.snap_to_angle(arg)
+            result = mp.cos(arg)
         elif 'tan(' in expr:
-            arg = expr.split('tan(')[1].rstrip(')')
-            result = mp.tan(mp.mpf(arg))
+            arg_str = expr.split('tan(')[1].rstrip(')')
+            arg = mp.pi if arg_str == 'pi' else mp.mpf(arg_str)
+            arg = self.snap_to_angle(arg)
+            result = mp.tan(arg)
         else:
             raise ValueError(f"Unsupported trig expr: {expr}")
 
@@ -208,6 +228,35 @@ class TrigonometryEngine(MathEngine):
         self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
         return result
 
+    def call_helper(self, expr):
+        """Dynamic helper: Route mixed expressions to appropriate engines and send results to segment_pools."""
+        # Determine engine based on keywords
+        if 'sin' in expr or 'cos' in expr or 'tan' in expr:
+            engine = TrigonometryEngine(self.segment_manager)
+        elif 'derivative' in expr or 'integral' in expr:
+            from calculus_engine import CalculusEngine
+            engine = CalculusEngine(self.segment_manager)
+        elif 'j' in expr or ('+' in expr and 'j' in expr):
+            from complex_algebra_engine import ComplexAlgebraEngine
+            engine = ComplexAlgebraEngine(self.segment_manager)
+        else:
+            # Default to basic arithmetic for numeric/symbolic mixes
+            from abc_engines import BasicArithmeticEngine
+            engine = BasicArithmeticEngine(self.segment_manager)
+
+        # Compute result
+        result = engine.compute(expr)
+
+        # Pack as mixed result (e.g., 'mixed:result') and send to segment_pools
+        mixed_packed = f"mixed:{result}".encode('utf-8')
+        self.segment_manager.receive_packed_segment('CallHelper', mixed_packed)
+
+        # Optional: Send part_order for deeper control
+        part_order = [{'part': 'mixed_result', 'value': str(result), 'bytes': mixed_packed}]
+        self.segment_manager.receive_part_order('CallHelper', f'mixed_{expr}', part_order)
+
+        return result
+
     def _convert_and_pack(self, parts):
         """Override: Handle angle/radian conversions for trig."""
         packed = super()._convert_and_pack(parts)
@@ -217,3 +266,4 @@ class TrigonometryEngine(MathEngine):
                 rad = mp.radians(mp.mpf(str(part).replace('deg', '')))
                 packed.extend(bytearray(str(rad).encode('utf-8')))
         return packed
+
