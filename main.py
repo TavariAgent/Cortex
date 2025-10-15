@@ -1,14 +1,13 @@
-from inspect import trace
+from inspect import trace as trace_func
 import asyncio
 from collections import defaultdict
 from abc_engines import MathEngine, BasicArithmeticEngine, TrigonometryEngine
 from xor_sub_dirs import XorSubDirectory # Awaiting integration
 
-class StageTracer(trace):
+class StageTracer:
     """Class for tracing the execution of the expression."""
 
     def __init__(self):
-        super().__init__()
         self.trace_data = []
 
     def __bool__(self):
@@ -20,11 +19,10 @@ class StageTracer(trace):
         else:
             print("No trace data")
 
-class Structure(trace):
+class Structure:
     """Class for determining the structure of the expression and returning a snapshot of all slices."""
 
     def __init__(self):
-        super().__init__()
         self.flags = {}
         self._initialize_flags()
 
@@ -55,6 +53,35 @@ class Structure(trace):
             'flags': self.flags.copy()
         }
         return snapshot
+
+class EngineWorker:
+    """Worker class for running engines in async context."""
+    
+    def __init__(self, engine_class, *args):
+        self.engine_class = engine_class
+        self.args = args
+        self.engine_instance = None
+    
+    async def run(self, task_config):
+        """Run the engine with given task configuration."""
+        # Create engine instance if needed
+        if self.engine_instance is None:
+            # Engines need segment_manager, create a stub if not provided
+            if self.args:
+                self.engine_instance = self.engine_class(*self.args)
+            else:
+                # Stub - in real use would need proper segment_manager
+                from segment_manager import SegmentManager
+                struct = Structure()
+                seg_mgr = SegmentManager(struct)
+                self.engine_instance = self.engine_class(seg_mgr)
+        
+        # Run the task
+        expr = task_config.get('expr', '')
+        if expr:
+            result = self.engine_instance.compute(expr)
+            return result
+        return None
 
 class ThreadedEngineManager:
     """Manages threaded execution of engines."""
@@ -181,11 +208,10 @@ class Compute:
         except:
             return final_bytes.decode('utf-8', errors='ignore')
 
-class Diagnostic(trace):
+class Diagnostic:
     """Class for reporting diagnostics and errors."""
 
     def __init__(self):
-        super().__init__()
         self.errors = []
 
     def log_error(self, msg):
