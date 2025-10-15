@@ -30,11 +30,19 @@ All operations integrate seamlessly with the existing parallel flow:
 ## Methods Implemented
 
 ### `compute(expr: str)`
-Parses and evaluates simple arithmetic expressions.
+Parses and evaluates arithmetic expressions with full PEMDAS support.
 
 **Supported Operations:**
 - Addition: `"2+3"` → `5.0`
+- Subtraction: `"10-5"` → `5.0`
 - Multiplication: `"3*4"` → `12.0`
+- Division: `"10/2"` → `5.0`
+- Complex expressions with proper order of operations: `"3*4-5+1+6/2+2"` → `13.0`
+
+**Order of Operations:**
+- Multiplication and division are evaluated first (left-to-right)
+- Addition and subtraction are evaluated second (left-to-right)
+- Follows standard PEMDAS rules
 
 **Example:**
 ```python
@@ -48,6 +56,10 @@ engine = BasicArithmeticEngine(segment_mgr)
 
 result = engine.compute('2+3')
 print(f"Result: {result}")  # Output: Result: 5.0
+
+# Complex expression with PEMDAS
+result = engine.compute('3*4-5+1+6/2+2')
+print(f"Result: {result}")  # Output: Result: 13.0
 
 # View traceback
 for trace in engine.traceback_info:
@@ -148,18 +160,32 @@ Step-wise information is recorded:
 }
 ```
 
+## Implementation Details
+
+### Tokenizer
+The `_tokenize()` method breaks down arithmetic expressions into tokens:
+- Numbers (including decimals)
+- Operators (+, -, *, /)
+- Handles whitespace gracefully
+
+### Evaluator
+The `_evaluate_tokens()` method processes tokens following PEMDAS:
+1. **First pass**: Processes multiplication and division left-to-right
+2. **Second pass**: Processes addition and subtraction left-to-right
+3. All calculations use `mpmath.mpf()` for high precision
+
 ## Limitations
 
 Current implementation:
-- Supports only simple binary operations (one operator per expression)
-- Handles addition (+) and multiplication (*) only
-- Does not support complex expressions with multiple operators
-- No operator precedence handling (by design - uses modular approach)
+- Supports addition (+), subtraction (-), multiplication (*), and division (/)
+- Handles full PEMDAS order of operations for these operators
+- Does not support parentheses
+- Does not support exponentiation (^ or **)
 
 Future enhancements could add:
-- Subtraction, division, and power operations
 - Support for parentheses
-- Multiple operators in single expression
+- Exponentiation operations
+- More advanced mathematical functions
 
 ## Performance
 

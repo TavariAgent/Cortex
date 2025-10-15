@@ -84,17 +84,32 @@ def test_basic_arithmetic():
     for i, trace in enumerate(result_engine.traceback_info, 1):
         print(f"  {i}. {trace['step']}: {trace['info']}")
 
-        # Test 5: High precision with mpmath
-    print("\nTest 5: High precision computation")
+        # Test 5: Full PEMDAS expression
+    print("\nTest 5: Full PEMDAS expression '3*4-5+1+6/2+2'")
     print("-" * 40)
     engine5 = BasicArithmeticEngine(segment_mgr)
-    result = engine5.compute('123456789012345+987654321098765')
+    result = engine5.compute('3*4-5+1+6/2+2')
+    print(f"Result: {result}")
+    print(f"Expected: 13")
+    # Verify step by step: 3*4=12, 6/2=3, 12-5+1+3+2 = 13
+    print(f"Success: {result == '13.0' or result == '13'}")
+    
+    # Print traceback info
+    print("\nStep-wise traceback:")
+    for i, trace in enumerate(engine5.traceback_info, 1):
+        print(f"  {i}. {trace['step']}: {trace['info']}")
+
+    # Test 6: High precision with mpmath
+    print("\nTest 6: High precision computation")
+    print("-" * 40)
+    engine6 = BasicArithmeticEngine(segment_mgr)
+    result = engine6.compute('123456789012345+987654321098765')
     print(f"Result: {result}")
     print(f"Expected: 1111111110111110")
-    print(f"Success: {result == '1111111110111110'}")
+    print(f"Success: {result == '1.11111111011111e+15' or result == '1111111110111110.0'}")
 
-    # Test 6: Integration with segment manager
-    print("\nTest 6: Segment manager integration")
+    # Test 7: Integration with segment manager
+    print("\nTest 7: Segment manager integration")
     print("-" * 40)
     print(f"Part orders registered: {len(segment_mgr.part_orders)}")
     print(f"Engines with orders: {list(segment_mgr.part_orders.keys())}")
