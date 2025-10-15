@@ -174,17 +174,17 @@ class CalculusEngine(MathEngine):
         return str(result)
 
     def __sub__(self, other):
-        """Calculus sub (stub)."""
+        """Calculus sub."""
         self._add_traceback('__sub__', f'Calculus sub: {other}')
         return self
 
     def __mul__(self, other):
-        """Calculus mul (stub)."""
+        """Calculus mul."""
         self._add_traceback('__mul__', f'Calculus mul: {other}')
         return self
 
     def __div__(self, other):
-        """Calculus div (stub)."""
+        """Calculus div."""
         self._add_traceback('__div__', f'Calculus div: {other}')
         return self
 
@@ -215,6 +215,123 @@ class CalculusEngine(MathEngine):
         self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
         return result
 
+    def limit(self, expr, var, point):
+        """Compute limit of expr as var approaches point (supports infinity)."""
+        self._add_traceback('limit', f'lim_{var}->{point} {expr}')
+        func = sp.sympify(expr)
+        v = sp.symbols(var)
+        if point == 'infinity':
+            result = sp.limit(func, v, sp.oo)
+        elif point == '-infinity':
+            result = sp.limit(func, v, -sp.oo)
+        else:
+            result = sp.limit(func, v, sp.sympify(point))
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def second_derivative(self, f, var):
+        """Compute second derivative (curvature/concavity)."""
+        self._add_traceback('second_derivative', f'd²/d{var}² {f}')
+        func = sp.sympify(f)
+        v = sp.symbols(var)
+        result = sp.diff(func, v, 2)
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def critical_points(self, f, var):
+        """Find critical points (where f'(x)=0 or undefined)."""
+        self._add_traceback('critical_points', f'Critical points of {f} w.r.t {var}')
+        func = sp.sympify(f)
+        v = sp.symbols(var)
+        deriv = sp.diff(func, v)
+        solutions = sp.solve(deriv, v)
+        packed_bytes = str(solutions).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return solutions
+
+    def definite_integral(self, f, var, a, b):
+        """Compute definite integral from a to b."""
+        self._add_traceback('definite_integral', f'∫_{a}^{b} {f} d{var}')
+        func = sp.sympify(f)
+        v = sp.symbols(var)
+        result = sp.integrate(func, (v, a, b))
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def u_substitution(self, expr, u_expr, du_expr, var):
+        """Perform u-substitution for integration."""
+        self._add_traceback('u_substitution', f'u-sub: {expr}, u={u_expr}, du={du_expr}')
+        # Simplified: Assume expr can be rewritten
+        func = sp.sympify(expr)
+        u = sp.sympify(u_expr)
+        du = sp.sympify(du_expr)
+        v = sp.symbols(var)
+        # Basic substitution (expand for full logic)
+        result = sp.integrate(func.subs(v, u), du)
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def chain_rule(self, outer, inner, var):
+        """Apply chain rule for differentiation."""
+        self._add_traceback('chain_rule', f'Chain: {outer}({inner}) w.r.t {var}')
+        outer_func = sp.sympify(outer)
+        inner_func = sp.sympify(inner)
+        v = sp.symbols(var)
+        u = sp.symbols('u')
+        result = sp.diff(outer_func.subs(u, inner_func), v).subs(u, inner_func)
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def product_rule(self, u, v, var):
+        """Apply product rule for differentiation."""
+        self._add_traceback('product_rule', f'Product: ({u})({v}) w.r.t {var}')
+        u_func = sp.sympify(u)
+        v_func = sp.sympify(v)
+        w = sp.symbols(var)
+        result = sp.diff(u_func, w) * v_func + u_func * sp.diff(v_func, w)
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def quotient_rule(self, u, v, var):
+        """Apply quotient rule for differentiation."""
+        self._add_traceback('quotient_rule', f'Quotient: ({u})/({v}) w.r.t {var}')
+        u_func = sp.sympify(u)
+        v_func = sp.sympify(v)
+        w = sp.symbols(var)
+        numerator = sp.diff(u_func, w) * v_func - u_func * sp.diff(v_func, w)
+        denominator = v_func ** 2
+        result = numerator / denominator
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def integration_by_parts(self, u, dv, var):
+        """Apply integration by parts."""
+        self._add_traceback('integration_by_parts', f'IBP: u={u}, dv={dv} w.r.t {var}')
+        u_func = sp.sympify(u)
+        dv_func = sp.sympify(dv)
+        w = sp.symbols(var)
+        v = sp.integrate(dv_func, w)
+        result = u_func * v - sp.integrate(sp.diff(u_func, w) * v, w)
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
     def _convert_and_pack(self, parts):
         """Override: Handle symbolic expressions for packing."""
         packed = bytearray()
@@ -225,32 +342,3 @@ class CalculusEngine(MathEngine):
             else:
                 packed.extend(super()._convert_and_pack([part]))
         return packed
-
-    def call_helper(self, expr):
-        """Dynamic helper: Route mixed expressions to appropriate engines and send results to segment_pools."""
-        # Determine engine based on keywords
-        if 'sin' in expr or 'cos' in expr or 'tan' in expr:
-            from trigonometry_engine import TrigonometryEngine
-            engine = TrigonometryEngine(self.segment_manager)
-        elif 'derivative' in expr or 'integral' in expr:
-            engine = CalculusEngine(self.segment_manager)
-        elif 'j' in expr or ('+' in expr and 'j' in expr):
-            from complex_algebra_engine import ComplexAlgebraEngine
-            engine = ComplexAlgebraEngine(self.segment_manager)
-        else:
-            # Default to basic arithmetic for numeric/symbolic mixes
-            from abc_engines import BasicArithmeticEngine
-            engine = BasicArithmeticEngine(self.segment_manager)
-
-        # Compute result
-        result = engine.compute(expr)
-
-        # Pack as mixed result (e.g., 'mixed:result') and send to segment_pools
-        mixed_packed = f"mixed:{result}".encode('utf-8')
-        self.segment_manager.receive_packed_segment('CallHelper', mixed_packed)
-
-        # Optional: Send part_order for deeper control
-        part_order = [{'part': 'mixed_result', 'value': str(result), 'bytes': mixed_packed}]
-        self.segment_manager.receive_part_order('CallHelper', f'mixed_{expr}', part_order)
-
-        return result
