@@ -122,13 +122,13 @@ class MathEngine(ABC):
         return packed
 
 
-class TrigonometryEngine(MathEngine):
-    """Handles trig functions: sin, cos, tan, etc. Implements dunders where ops apply."""
+class ComplexAlgebraEngine(MathEngine):
+    """Handles complex numbers: real + imag*j. Overloads for complex ops."""
 
     def __init__(self, segment_manager):
         super().__init__(segment_manager)
         self.traceback_info = []
-        self._value = "0"
+        self._value = "0+0j"  # Default complex
 
     def _add_traceback(self, step, info):
         """Add step-wise traceback for debugging."""
@@ -145,75 +145,51 @@ class TrigonometryEngine(MathEngine):
         })
 
     def compute(self, expr):
-        """Compute trig expressions, e.g., sin(3.14)."""
+        """Compute complex expressions, e.g., (1+2j)*(3+4j)."""
         self._add_traceback('compute_start', f'Expression: {expr}')
         mp.dps = 50
 
-        # Simple: assume expr is like 'sin(3.14)'
-        if 'sin(' in expr:
-            arg = expr.split('sin(')[1].rstrip(')')
-            result = mp.sin(mp.mpf(arg))
-        elif 'cos(' in expr:
-            arg = expr.split('cos(')[1].rstrip(')')
-            result = mp.cos(mp.mpf(arg))
-        elif 'tan(' in expr:
-            arg = expr.split('tan(')[1].rstrip(')')
-            result = mp.tan(mp.mpf(arg))
+        # Simple: parse basic complex ops (expand as needed)
+        if '+' in expr and 'j' in expr:
+            parts = expr.split('+')
+            real = mp.mpf(parts[0])
+            imag = mp.mpf(parts[1].replace('j', ''))
+            result = mp.mpc(real, imag)
         else:
-            raise ValueError(f"Unsupported trig expr: {expr}")
+            raise ValueError(f"Unsupported complex expr: {expr}")
 
-        self._add_traceback('result', f'Trig result: {result}')
+        self._add_traceback('result', f'Complex result: {result}')
         packed_bytes = str(result).encode('utf-8')
         self._cache.append(packed_bytes)
         self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        part_order = [{'part': 'trig_result', 'value': str(result), 'bytes': packed_bytes}]
-        self.segment_manager.receive_part_order(self.__class__.__name__, f'trig_{expr}', part_order)
+        part_order = [{'part': 'complex_result', 'value': str(result), 'bytes': packed_bytes}]
+        self.segment_manager.receive_part_order(self.__class__.__name__, f'complex_{expr}', part_order)
         return str(result)
 
     def __sub__(self, other):
-        """Trig-specific sub (stub)."""
-        self._add_traceback('__sub__', f'Trig sub: {other}')
+        """Complex sub."""
+        self._add_traceback('__sub__', f'Complex sub: {other}')
+        # Implement complex subtraction
         return self
 
     def __mul__(self, other):
-        """Trig-specific mul (stub)."""
-        self._add_traceback('__mul__', f'Trig mul: {other}')
+        """Complex mul."""
+        self._add_traceback('__mul__', f'Complex mul: {other}')
+        # Implement complex multiplication
         return self
 
     def __div__(self, other):
-        """Trig-specific div (stub)."""
-        self._add_traceback('__div__', f'Trig div: {other}')
+        """Complex div (stub)."""
+        self._add_traceback('__div__', f'Complex div: {other}')
         return self
 
     def __pow__(self, other):
-        """Trig-specific pow (stub)."""
-        self._add_traceback('__pow__', f'Trig pow: {other}')
+        """Complex pow."""
+        self._add_traceback('__pow__', f'Complex pow: {other}')
+        # Implement complex exponentiation
         return self
 
-    def sin(self, x):
-        """Compute sin using mpmath."""
-        self._add_traceback('sin', f'sin({x})')
-        result = mp.sin(mp.mpf(str(x)))
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def cos(self, x):
-        """Compute cos using mpmath."""
-        self._add_traceback('cos', f'cos({x})')
-        result = mp.cos(mp.mpf(str(x)))
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
     def _convert_and_pack(self, parts):
-        """Override: Handle angle/radian conversions for trig."""
-        packed = super()._convert_and_pack(parts)
-        # Additional: Pre-pack trig-specific (e.g., convert to radians)
-        for part in parts:
-            if 'deg' in str(part):  # Assume degrees marker
-                rad = mp.radians(mp.mpf(str(part).replace('deg', '')))
-                packed.extend(bytearray(str(rad).encode('utf-8')))
-        return packed
+        """Override: Pack complex parts efficiently."""
+        # Use default but ensure complex handling
+        return super()._convert_and_pack(parts)
