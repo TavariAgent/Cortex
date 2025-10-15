@@ -1,3 +1,4 @@
+import functools
 from abc import ABC, abstractmethod
 import asyncio
 import math
@@ -77,20 +78,12 @@ class MathEngine(ABC):
         pass
 
     @abstractmethod
-    def __truediv__(self, other):
+    def __div__(self, other):
         pass
 
     @abstractmethod
     def __pow__(self, other):
         pass
-
-    def __add__(self, other):
-        """Overload __add__: Send part orders to segment manager per-slice."""
-        # Stub: Generate part orders based on engine logic
-        part_order = [{'part': 'example', 'bytes': b'data'}]  # Mock
-        slice_data = 'slice_1'  # From expression parsing
-        self.segment_manager.receive_part_order(self.__class__.__name__, slice_data, part_order)
-        return self  # Or metadata
 
     def _convert_and_pack(self, parts):
         """Helper method: Convert multi-part inputs to byte arrays, pre-pack for intra-engine ops, and prepare for __add__ to segment manager.
@@ -156,160 +149,265 @@ class BasicArithmeticEngine(MathEngine):
             raise ValueError(f"Invalid number format: {num_str}")
 
     def _tokenize(self, expr):
-        """Tokenize an arithmetic expression into numbers, operators, and parentheses.
-        
-        Handles:
-        - Parentheses (regular parens for nesting)
-        - Function parentheses (e.g., sin(), cos())
-        - Numbers and basic operators
-        
-        Operator ordering is delegated to Structure/priority map via SegmentManager._dropdown_assemble.
-        
-        Returns a list of tokens where each token is either a number (as string), an operator, 
-        a parenthesis, or a function name.
-        Validates that each number has at most one decimal point.
-        """
+        """Tokenize into slices and functions, grouping numbers/operators per slice."""
         tokens = []
-        current_num = ""
-        current_func = ""
         i = 0
-        
+
         while i < len(expr):
             char = expr[i]
-            
-            # Check for function names (sin, cos, tan, etc.)
+
             if char.isalpha():
-                current_func += char
-                # Look ahead to check if this is a function (followed by '(')
-                if i + 1 < len(expr) and expr[i + 1] == '(':
-                    # This is a function
-                    tokens.append(current_func)
-                    current_func = ""
-                elif i + 1 >= len(expr) or not expr[i + 1].isalpha():
-                    # End of function name but no '(' - treat as variable or error
-                    if current_func:
-                        tokens.append(current_func)
-                        current_func = ""
-            elif char.isdigit() or char == '.':
-                # Handle numbers
-                current_num += char
-            elif char in '+-*/':
-                # Handle operators
-                if current_num:
-                    # Validate and add the number
-                    self._validate_number(current_num)
-                    tokens.append(current_num)
-                    current_num = ""
-                elif current_func:
-                    # Function name without parentheses before operator
-                    tokens.append(current_func)
-                    current_func = ""
-                    
-                tokens.append(char)
-            elif char in '()':
-                # Handle parentheses (regular and function parens)
-                if current_num:
-                    # Validate and add the number
-                    self._validate_number(current_num)
-                    tokens.append(current_num)
-                    current_num = ""
-                elif current_func:
-                    # This shouldn't happen as we handle functions above
-                    tokens.append(current_func)
-                    current_func = ""
-                tokens.append(char)
+                # Function detection (same as before)
+                func_start = i
+                while i < len(expr) and expr[i].isalpha():
+                    i += 1
+                func_name = expr[func_start:i]
+
+                if i < len(expr) and expr[i] == '(':
+                    paren_count = 1
+                    arg_start = i + 1
+                    i += 1
+                    while i < len(expr) and paren_count > 0:
+                        if expr[i] == '(':
+                            paren_count += 1
+                        elif expr[i] == ')':
+                            paren_count -= 1
+                        i += 1
+                    func_token = expr[func_start:i]
+                    tokens.append(func_token)
+                else:
+                    tokens.append(func_name)
+            elif char == '(':
+                # Slice: tokenize entire nest as one token (deepest first)
+                slice_token = self._tokenize_slice(expr, i)
+                tokens.append(slice_token)  # e.g., "(3*4-5)"
+                i += len(slice_token)
+            elif char.isdigit() or char == '.' or char in '+-*/':
+                # For top-level without parens: group as a slice token
+                slice_start = i
+                while i < len(expr) and (expr[i].isdigit() or expr[i] in '+-*/.' or expr[i] == ' '):
+                    i += 1
+                slice_content = expr[slice_start:i].replace(' ', '')  # Remove spaces
+                tokens.append(f"({slice_content})")  # Wrap as slice for consistency
             elif char == ' ':
-                # Skip spaces
-                if current_num:
-                    # Validate and add the number
-                    self._validate_number(current_num)
-                    tokens.append(current_num)
-                    current_num = ""
-                elif current_func:
-                    # Space after function name
-                    tokens.append(current_func)
-                    current_func = ""
+                i += 1
             else:
-                raise ValueError(f"Invalid character in expression: {char}")
-            
-            i += 1
-        
-        # Add last number or function if exists
-        if current_num:
-            # Validate number format
-            self._validate_number(current_num)
-            tokens.append(current_num)
-        elif current_func:
-            tokens.append(current_func)
-        
+                raise ValueError(f"Invalid character: {char}")
+
+        # Treat the whole expression as one slice to avoid splitting on trailing operators
+        tokens = [f"({expr.replace(' ', '')})"]
         return tokens
 
+    def _tokenize_slice(self, expr, start_idx):
+        """Tokenize a paren slice as one token, recursing for nests."""
+        paren_count = 1
+        i = start_idx + 1
+        content = ""
+
+        while i < len(expr) and paren_count > 0:
+            if expr[i] == '(':
+                # Nested slice
+                nested = self._tokenize_slice(expr, i)
+                content += nested
+                i += len(nested)
+            elif expr[i] == ')':
+                paren_count -= 1
+                if paren_count == 0:
+                    break
+            else:
+                content += expr[i]
+                i += 1
+
+        return f"({content})"
+
     def _evaluate_tokens(self, tokens):
-        """Evaluate tokenized expression following PEMDAS order of operations.
-        
-        Processes multiplication and division first (left-to-right), 
-        then addition and subtraction (left-to-right).
-        Uses mpmath for all calculations.
-        """
-        if not tokens:
-            raise ValueError("Empty token list")
-        
-        # Convert to list to allow modification
-        tokens = list(tokens)
-        
-        self._add_traceback('tokens', f'Initial tokens: {tokens}')
-        
-        # First pass: Handle multiplication and division (left to right)
+        """Process tokens, evaluating slices and functions recursively."""
+        processed = []
+
+        for token in tokens:
+            if token.startswith('(') and token.endswith(')'):
+                # Slice: strip parens and compute inner arithmetic
+                inner_expr = token[1:-1]
+                if inner_expr:  # Not empty
+                    result = self._evaluate_slice(inner_expr)
+                    processed.append(str(result))
+                else:
+                    processed.append(token)
+            elif any(func in token for func in ['sin(', 'cos(', 'tan(']):
+                # Function: quick unpack
+                unpacked = self.quick_unpack_function(token)
+                processed.append(unpacked)
+            else:
+                processed.append(token)
+
+        self._add_traceback('processed_tokens', f'Processed tokens: {processed}')
+        return processed
+
+    def _evaluate_slice(self, slice_expr):
+        """Evaluate a slice's inner expression with functions, parens, and PEMDAS."""
+        # First, handle functions by replacing with computed values
+        for func in ['sin', 'cos', 'tan', 'log', 'sqrt']:
+            func_call = f"{func}("
+            while func_call in slice_expr:
+                start = slice_expr.find(func_call)
+                paren_count = 1
+                j = start + len(func_call)
+                while j < len(slice_expr) and paren_count > 0:
+                    if slice_expr[j] == '(':
+                        paren_count += 1
+                    elif slice_expr[j] == ')':
+                        paren_count -= 1
+                    j += 1
+                if paren_count > 0:
+                    raise ValueError("Mismatched parens in function")
+                func_token = slice_expr[start:j]
+                replaced = self.quick_unpack_function(func_token)
+                slice_expr = slice_expr[:start] + replaced + slice_expr[j:]
+
+        # Then handle parentheses recursively
+        while '(' in slice_expr:
+            start = slice_expr.find('(')
+            end = start + 1
+            count = 1
+            while end < len(slice_expr) and count > 0:
+                if slice_expr[end] == '(':
+                    count += 1
+                elif slice_expr[end] == ')':
+                    count -= 1
+                end += 1
+            if count > 0:
+                raise ValueError("Mismatched parentheses in slice")
+            sub_expr = slice_expr[start + 1:end - 1]
+            sub_result = self._evaluate_slice(sub_expr)  # Recursive call
+            slice_expr = slice_expr[:start] + str(sub_result) + slice_expr[end:]
+
+        # Now tokenize the flat expression (no parens or functions left)
+        sub_tokens = []
+        current = ""
+        for char in slice_expr:
+            if char.isdigit() or char == '.':
+                current += char
+            elif char in '+-*/':
+                if current:
+                    sub_tokens.append(current)
+                    current = ""
+                sub_tokens.append(char)
+            elif char != ' ':
+                raise ValueError(f"Invalid char in slice: {char}")
+        if current:
+            sub_tokens.append(current)
+
+        # Apply PEMDAS: first * /, then + -
+        tokens = sub_tokens[:]
         i = 0
         while i < len(tokens):
             if i > 0 and tokens[i] in ['*', '/'] and i + 1 < len(tokens):
-                operator = tokens[i]
-                left = mp.mpf(tokens[i-1])
-                right = mp.mpf(tokens[i+1])
-                
-                if operator == '*':
-                    result = left * right
-                    self._add_traceback('multiply', f'{left} * {right} = {result}')
-                else:  # division
-                    result = left / right
-                    self._add_traceback('divide', f'{left} / {right} = {result}')
-                
-                # Replace the three tokens (left, op, right) with result
-                tokens = tokens[:i-1] + [str(result)] + tokens[i+2:]
-                # Don't increment i, check same position again
+                left = mp.mpf(tokens[i - 1])
+                right = mp.mpf(tokens[i + 1])
+                op = tokens[i]
+                result = left * right if op == '*' else left / right
+                tokens = tokens[:i - 1] + [str(result)] + tokens[i + 2:]
             else:
                 i += 1
-        
-        self._add_traceback('after_mul_div', f'After mul/div: {tokens}')
-        
-        # Second pass: Handle addition and subtraction (left to right)
+
         i = 0
         while i < len(tokens):
             if i > 0 and tokens[i] in ['+', '-'] and i + 1 < len(tokens):
-                operator = tokens[i]
-                left = mp.mpf(tokens[i-1])
-                right = mp.mpf(tokens[i+1])
-                
-                if operator == '+':
-                    result = left + right
-                    self._add_traceback('add', f'{left} + {right} = {result}')
-                else:  # subtraction
-                    result = left - right
-                    self._add_traceback('subtract', f'{left} - {right} = {result}')
-                
-                # Replace the three tokens with result
-                tokens = tokens[:i-1] + [str(result)] + tokens[i+2:]
-                # Don't increment i, check same position again
+                left = mp.mpf(tokens[i - 1])
+                right = mp.mpf(tokens[i + 1])
+                op = tokens[i]
+                result = left + right if op == '+' else left - right
+                tokens = tokens[:i - 1] + [str(result)] + tokens[i + 2:]
             else:
                 i += 1
-        
-        self._add_traceback('after_add_sub', f'Final tokens: {tokens}')
-        
-        # Should have exactly one token left - the result
+
         if len(tokens) != 1:
-            raise ValueError(f"Invalid expression evaluation, tokens remaining: {tokens}")
-        
-        return mp.mpf(tokens[0])
+            raise ValueError(f"Slice evaluation failed: {tokens}")
+
+        result = mp.mpf(tokens[0])
+        return result
+
+    def quick_unpack_function(self, func_token):
+        """Quick-unpack function: Calculate inner numerics, fold result.
+
+        E.g., 'sin(3+4)' -> compute inner '3+4' = 7, then sin(7).
+        Uses mpmath for precision, delegates to engines if complex.
+        Returns folded string result.
+        """
+        # Parse function name and argument
+        if '(' not in func_token or ')' not in func_token:
+            raise ValueError(f"Invalid function token: {func_token}")
+
+        func_name = func_token.split('(')[0]
+        inner_expr = func_token.split('(')[1].rstrip(')')
+
+        # Compute inner expression (simple for now; delegate to compute if nested)
+        if '+' in inner_expr or '-' in inner_expr or '*' in inner_expr or '/' in inner_expr:
+            # Use basic compute for inner arithmetic
+            inner_result = self.compute(inner_expr)
+        else:
+            inner_result = inner_expr
+
+        # Apply function using mpmath
+        arg = mp.mpf(inner_result)
+        if func_name == 'sin':
+            result = mp.sin(arg)
+        elif func_name == 'cos':
+            result = mp.cos(arg)
+        elif func_name == 'tan':
+            result = mp.tan(arg)
+        else:
+            raise ValueError(f"Unsupported function: {func_name}")
+
+        self._add_traceback('function_unpack', f'{func_token} -> {func_name}({inner_result}) = {result}')
+        return str(result)
+
+    def _process_parentheses(self, tokens):
+        """Recursively process parentheses to isolate nests."""
+        result = []
+        i = 0
+        while i < len(tokens):
+            if tokens[i] == '(':
+                paren_count = 1
+                j = i + 1
+                while j < len(tokens) and paren_count > 0:
+                    if tokens[j] == '(':
+                        paren_count += 1
+                    elif tokens[j] == ')':
+                        paren_count -= 1
+                    j += 1
+                if paren_count > 0:
+                    raise ValueError("Mismatched parentheses")
+                # Recursively process the subexpression
+                subexpr = tokens[i + 1:j - 1]
+                processed_sub = self._process_parentheses(subexpr)
+                result.append(f"({','.join(processed_sub)})")  # Mark as processed nest
+                i = j
+            elif tokens[i] == ')':
+                raise ValueError("Mismatched parentheses")
+            else:
+                result.append(tokens[i])
+                i += 1
+        return result
+
+    def _detect_functions(self, tokens):
+        """Detect and mark functions in tokens."""
+        result = []
+        i = 0
+        while i < len(tokens):
+            if tokens[i] in ['sin', 'cos', 'tan', 'log', 'sqrt']:  # Add more as needed
+                if i + 2 < len(tokens) and tokens[i + 1] == '(' and tokens[i + 3] == ')':
+                    # Function with argument
+                    arg = tokens[i + 2]
+                    result.append(f"{tokens[i]}({arg})")  # Mark function call
+                    i += 4
+                else:
+                    result.append(tokens[i])
+                    i += 1
+            else:
+                result.append(tokens[i])
+                i += 1
+        return result
 
     def compute(self, expr):
         """Parse and compute arithmetic expressions with full PEMDAS support.
@@ -325,15 +423,18 @@ class BasicArithmeticEngine(MathEngine):
 
         # Parse the expression
         expr = expr.strip()
-        
+
         # Tokenize the expression
         tokens = self._tokenize(expr)
         self._add_traceback('tokenize', f'Tokens: {tokens}')
-        
+
         # Evaluate with PEMDAS
         result = self._evaluate_tokens(tokens)
-        
-        self._add_traceback('computation', f'Final result: {result}')
+        processed = self._evaluate_tokens(tokens)
+        self._add_traceback('computation', f'Final result: {processed}')
+
+        # Strip list if single result
+        final_result = processed[0] if isinstance(processed, list) and len(processed) == 1 else processed
 
         # Pack result as bytes and accumulate in cache
         packed_bytes = str(result).encode('utf-8')
@@ -353,50 +454,47 @@ class BasicArithmeticEngine(MathEngine):
             part_order
         )
 
-        return str(result)  # Return string to avoid float comparisons
+        return str(final_result)
 
     def __add__(self, other):
-        """Perform addition using mpmath for high precision.
+        """Overload __add__: Send part orders to segment manager per-slice."""
+        # Stub: Generate part orders based on engine logic
+        part_order = [{'part': 'example', 'bytes': b'data'}]  # Mock
+        slice_data = 'slice_1'  # From expression parsing
+        self.segment_manager.receive_part_order(self.__class__.__name__, slice_data, part_order)
+        return self  # Or metadata
 
-        Overrides the base class to use mpmath instead of floats/Decimals.
-        Integrates with segment manager for parallel flow.
+    @functools.lru_cache(maxsize=128)  # Cache up to 128 recent additions
+    def _cached_add(self, self_val_str, other_val_str):
+        """Cached addition using mpmath (hashable strings for lru_cache).
+
+        Returns result string; cache diverts repeated ops.
         """
-        self._add_traceback('__add__', f'Adding {self._value} and {other}')
-
-        # Convert to mpmath
-        self_val = mp.mpf(self._value)
-        other_val = mp.mpf(str(other))
-
-        self._add_traceback('conversion', f'Converted: self={self_val}, other={other_val}')
-
-        # Perform addition using mpmath
+        self_val = mp.mpf(self_val_str)
+        other_val = mp.mpf(other_val_str)
         result = self_val + other_val
+        return str(result)
 
-        self._add_traceback('result', f'Addition result: {result}')
+    def add_arithmetic(self, other):
+        """Dedicated arithmetic addition using mpmath with caching (no pool management).
 
-        # Pack result as bytes and accumulate in cache
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        
-        # Send packed bytes to segment manager
-        self.segment_manager.receive_packed_segment(
-            self.__class__.__name__,
-            packed_bytes
-        )
+        Call this for pure arithmetic to leverage lru_cache.
+        """
+        self._add_traceback('add_arithmetic', f'Adding {self._value} and {other}')
 
-        # Send to segment manager (original behavior for compatibility)
-        part_order = [{'part': 'add_result', 'value': str(result), 'bytes': packed_bytes}]
-        self.segment_manager.receive_part_order(
-            self.__class__.__name__,
-            f'add_op',
-            part_order
-        )
+        # Use cached add
+        result_str = self._cached_add(self._value, str(other))
 
-        # Return result wrapped in engine instance for chaining
+        self._add_traceback('result', f'Addition result (cached): {result_str}')
+
+        # Check cache info (optional debug)
+        cache_info = self._cached_add.cache_info()
+        self._add_traceback('cache_status', f'Hits: {cache_info.hits}, Misses: {cache_info.misses}')
+
+        # Return new engine instance for chaining
         new_engine = BasicArithmeticEngine(self.segment_manager)
-        new_engine._value = str(result)
+        new_engine._value = result_str
         new_engine.traceback_info = self.traceback_info.copy()
-        new_engine._cache = self._cache.copy()  # Propagate cache
         return new_engine
 
     def __mul__(self, other):
@@ -449,11 +547,56 @@ class BasicArithmeticEngine(MathEngine):
         # TODO: Implement using mpmath
         return self
 
-    def __truediv__(self, other):
-        """Stub implementation for division."""
-        self._add_traceback('__truediv__', f'Dividing {self._value} by {other}')
-        # TODO: Implement using mpmath
-        return self
+    def __div__(self, other):
+        """Custom division using mpmath for high precision (deprecated but precise).
+
+        Avoids float fallbacks by using mpmath directly.
+        Integrates with segment manager for parallel flow.
+        """
+        self._add_traceback('__div__', f'Dividing {self._value} by {other}')
+
+        # Convert to mpmath
+        self_val = mp.mpf(self._value)
+        other_val = mp.mpf(str(other))
+
+        if other_val == 0:
+            raise ValueError("Division by zero")
+
+        # Perform division using mpmath (direct operator for precision)
+        result = self_val / other_val
+
+        self._add_traceback('result', f'Division result: {result}')
+
+        # Send to segment manager
+        part_order = [{'part': 'div_result', 'value': str(result), 'bytes': str(result).encode('utf-8')}]
+        self.segment_manager.receive_part_order(
+            self.__class__.__name__,
+            f'div_op',
+            part_order
+        )
+
+        # Return result wrapped in engine instance for chaining
+        new_engine = BasicArithmeticEngine(self.segment_manager)
+        new_engine._value = str(result)
+        new_engine.traceback_info = self.traceback_info.copy()
+        return new_engine
+
+    @staticmethod
+    def _spawn_div(numerator, denominator):
+        """Dynamic spawner for division: Generates a fresh division function per request.
+
+        This modularizes division logic, avoiding fixed abstracts and potential float contamination.
+        Returns a lambda that performs mpmath division.
+        """
+
+        def div_func():
+            num_mp = mp.mpf(str(numerator))
+            den_mp = mp.mpf(str(denominator))
+            if den_mp == 0:
+                raise ValueError("Division by zero in spawned div")
+            return str(num_mp / den_mp)
+
+        return div_func
 
     def __pow__(self, other):
         """Stub implementation for power."""
