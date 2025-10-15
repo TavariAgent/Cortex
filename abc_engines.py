@@ -152,6 +152,7 @@ class BasicArithmeticEngine(MathEngine):
         """Tokenize an arithmetic expression into numbers and operators.
         
         Returns a list of tokens where each token is either a number (as string) or an operator.
+        Validates that each number has at most one decimal point.
         """
         tokens = []
         current_num = ""
@@ -161,12 +162,24 @@ class BasicArithmeticEngine(MathEngine):
                 current_num += char
             elif char in '+-*/':
                 if current_num:
+                    # Validate number format (only one decimal point)
+                    if current_num.count('.') > 1:
+                        raise ValueError(f"Invalid number format: {current_num}")
                     tokens.append(current_num)
                     current_num = ""
+                elif not tokens:
+                    # Expression starts with an operator (invalid)
+                    raise ValueError(f"Expression cannot start with operator: {char}")
+                else:
+                    # Consecutive operators (invalid)
+                    raise ValueError(f"Consecutive operators not allowed: {tokens[-1]}{char}")
                 tokens.append(char)
             elif char == ' ':
                 # Skip spaces
                 if current_num:
+                    # Validate number format before adding
+                    if current_num.count('.') > 1:
+                        raise ValueError(f"Invalid number format: {current_num}")
                     tokens.append(current_num)
                     current_num = ""
             else:
@@ -174,7 +187,13 @@ class BasicArithmeticEngine(MathEngine):
         
         # Add last number if exists
         if current_num:
+            # Validate number format
+            if current_num.count('.') > 1:
+                raise ValueError(f"Invalid number format: {current_num}")
             tokens.append(current_num)
+        elif tokens and tokens[-1] in '+-*/':
+            # Expression ends with operator (invalid)
+            raise ValueError(f"Expression cannot end with operator: {tokens[-1]}")
         
         return tokens
 
@@ -196,7 +215,7 @@ class BasicArithmeticEngine(MathEngine):
         # First pass: Handle multiplication and division (left to right)
         i = 0
         while i < len(tokens):
-            if i > 0 and i < len(tokens) and tokens[i] in ['*', '/']:
+            if i > 0 and tokens[i] in ['*', '/'] and i + 1 < len(tokens):
                 operator = tokens[i]
                 left = mp.mpf(tokens[i-1])
                 right = mp.mpf(tokens[i+1])
@@ -219,7 +238,7 @@ class BasicArithmeticEngine(MathEngine):
         # Second pass: Handle addition and subtraction (left to right)
         i = 0
         while i < len(tokens):
-            if i > 0 and i < len(tokens) and tokens[i] in ['+', '-']:
+            if i > 0 and tokens[i] in ['+', '-'] and i + 1 < len(tokens):
                 operator = tokens[i]
                 left = mp.mpf(tokens[i-1])
                 right = mp.mpf(tokens[i+1])
