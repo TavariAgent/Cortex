@@ -335,8 +335,18 @@ class BasicArithmeticEngine(MathEngine):
         
         self._add_traceback('computation', f'Final result: {result}')
 
-        # Send to segment manager
-        part_order = [{'part': 'result', 'value': str(result), 'bytes': str(result).encode('utf-8')}]
+        # Pack result as bytes and accumulate in cache
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        
+        # Send packed bytes to segment manager
+        self.segment_manager.receive_packed_segment(
+            self.__class__.__name__,
+            packed_bytes
+        )
+
+        # Send to segment manager (original behavior for compatibility)
+        part_order = [{'part': 'result', 'value': str(result), 'bytes': packed_bytes}]
         self.segment_manager.receive_part_order(
             self.__class__.__name__,
             f'compute_{expr.replace(" ", "")}',
