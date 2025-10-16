@@ -44,27 +44,6 @@ class MathEngine(ABC):
             return [part for _, part in ordered]
         return parts  # No change if not applying
 
-    async def _compute_parts_parallel(self, parts):
-        """Helper: Compute all parts in parallel, using _set_part_order at start."""
-        ordered_parts = self._set_part_order(parts, apply_at_start=True)
-        tasks = [self._compute_single_part(part) for part in ordered_parts]
-        results = await asyncio.gather(*tasks)
-        # Apply again after return if needed
-        final_results = self._set_part_order(results, apply_after_return=True)
-        for i, result in enumerate(final_results):
-            self.segment_manager.receive_part_order(
-                self.__class__.__name__,
-                f'part_{i}',
-                [{'part': f'part_{i}', 'result': result}]
-            )
-        return final_results
-
-    async def _compute_single_part(self, part):
-        """Stub: Compute single part, respecting priorities."""
-        if 'nest' in str(part):
-            return f"nested_{part}"
-        return part * 2
-
     # Stub dunder methods for math ops (except __add__ which is handled by segment_manager)
     @abstractmethod
     def __sub__(self, other):
@@ -90,39 +69,6 @@ class MathEngine(ABC):
         self.segment_manager.receive_part_order(self.__class__.__name__, slice_data, part_order)
         return self  # Or metadata
 
-    def _convert_and_pack(self, parts):
-        """Helper method: Convert multi-part inputs to byte arrays, pre-pack for intra-engine ops, and prepare for __add__ to segment manager.
-
-        This handles conversions during expression stages, producing new values to pre-pack.
-        Engines can override for specific logic (e.g., numerical vs. symbolic).
-        Returns a pre-packed value ready for XOR sub-directory segment handling.
-        """
-        # Stub: Default conversion logic
-        byte_arrays = []
-        for part in parts:
-            if isinstance(part, int):
-                # Convert to byte string (big-endian, with liberal allocation)
-                byte_str = str(part).encode('utf-8')
-                byte_arrays.append(bytearray(byte_str))
-            elif isinstance(part, str):
-                byte_arrays.append(bytearray(part.encode('utf-8')))
-            elif isinstance(part, complex):
-                # For complex: pack real and imag separately
-                real_bytes = bytearray(str(part.real).encode('utf-8'))
-                imag_bytes = bytearray(str(part.imag).encode('utf-8'))
-                byte_arrays.extend([real_bytes, imag_bytes])
-            else:
-                # Fallback: assume bytes or convertible
-                byte_arrays.append(bytearray(str(part).encode('utf-8')))
-
-        # Pre-pack: Combine into a single bytearray (simple concatenation; engines can customize)
-        packed = bytearray()
-        for ba in byte_arrays:
-            packed.extend(ba)
-
-        # Return pre-packed value for __add__ to segment manager (via XOR sub-dir)
-        return packed
-
 
 class CalculusEngine(MathEngine):
     """Handles derivatives, integrals, limits. Heavily relies on SymPy."""
@@ -147,118 +93,137 @@ class CalculusEngine(MathEngine):
         })
 
     def compute(self, expr):
-        """Compute calculus expressions, supporting dual actions like derivative(x**2, x), 2*x."""
+        """Compute calculus expressions."""
         self._add_traceback('compute_start', f'Expression: {expr}')
+        expr = sp.sympify(expr)
+        if expr.is_Symbol:
+            self._value = str(expr)
+            # Calculate derivative
+            parts = expr.find(lambda x: x.is_Derivative)
+            self._add_traceback(
+                'compute_derivative',
+                f'Calculus expression: {expr}, Derivative: {parts}'
+            )
+            if parts:
+                return self.derivative(str(expr), self._value)
+                # Calculate integral
+            parts = expr.find(lambda x: x.is_Integral)
+            self._add_traceback(
+                'compute_integral',
+                f'Calculus expression: {expr}, Integral: {parts}'
+            )
+            if parts:
+                return self.integral(str(expr), self._value)
+                # Calculate limit
+            parts = expr.find(lambda x: x.is_Limit)
+            self._add_traceback(
+                'compute_limit',
+                f'Calculus expression: {expr}, Limit: {parts}'
+            )
+            if parts:
+                return self.limit(str(expr), self._value, 'infinity')
+                # Calculate second derivative
+            parts = expr.find(lambda x: x.is_SecondDerivative)
+            self._add_traceback(
+                'compute_second_derivative',
+                f'Calculus expression: {expr}, Second Derivative: {parts}'
+            )
+            if parts:
+                return self.second_derivative(str(expr), self._value)
+                # Calculate Critical Points
+            parts = expr.find(lambda x: x.is_Function)
+            self._add_traceback(
+                'compute_critical_points',
+                f'Calculus expression: {expr}, Critical Points: {parts}'
+            )
+            if parts:
+                return self.critical_points(str(expr), self._value)
+                # Calculate definite integral
+            parts = expr.find(lambda x: x.is_Integral)
+            self._add_traceback(
+                'compute_definite_integral',
+                f'Calculus expression: {expr}, Definite Integral: {parts}'
+            )
+            if parts:
+                return self.definite_integral(str(expr), self._value, 0, 1)
+                # Calculate u-substitution
+            parts = expr.find(lambda x: x.is_Function)
+            self._add_traceback(
+                'compute_u_substitution',
+                f'Calculus expression: {expr}, u-substitution: {parts}'
+            )
+            if parts:
+                return self.u_substitution(str(expr), 'u', 'du', self._value)
+                # Calculate chain rule
+            parts = expr.find(lambda x: x.is_Function)
+            self._add_traceback(
+                'compute_chain_rule',
+                f'Calculus expression: {expr}, Chain Rule: {parts}'
+            )
+            if parts:
+                return self.chain_rule(str(expr), 'f', self._value)
+                # Calculate product rule
+            parts = expr.find(lambda x: x.is_Mul)
+            self._add_traceback(
+                'compute_product_rule',
+                f'Calculus expression: {expr}, Product Rule: {parts}'
+            )
+            if parts:
+                return self.product_rule(str(expr), 'u', self._value)
+                # Calculate quotient rule
+            parts = expr.find(lambda x: x.is_Mul)
+            self._add_traceback(
+                'compute_quotient_rule',
+                f'Calculus expression: {expr}, Quotient Rule: {parts}'
+            )
+            if parts:
+                return self.quotient_rule(str(expr), 'u', self._value)
+                # Calculate integration by parts
+            parts = expr.find(lambda x: x.is_Integral)
+            self._add_traceback(
+                'compute_integration_by_parts',
+                f'Calculus expression: {expr}, Integration by Parts: {parts}'
+            )
+            if parts:
+                return self.integration_by_parts(str(expr), 'u', self._value)
+                # Calculate Taylor series expansion
+            parts = expr.find(lambda x: x.is_Function)
+            self._add_traceback(
+                'compute_taylor_series_expansion',
+                f'Calculus expression: {expr}, Taylor Series Expansion: {parts}'
+            )
+            if parts:
+                return self.taylor_series_expansion(str(expr), 'f', self._value)
+            return self._value
 
-        # Check for dual action (comma-separated)
-        if ',' in expr:
-            parts = [p.strip() for p in expr.split(',')]
-            if len(parts) == 2:
-                left_expr, right_expr = parts
-                left_result = self._compute_single(left_expr)
-                right_result = self._compute_single(right_expr)
-                # For verification: if left is derivative/integral, compare to right
-                if 'derivative(' in left_expr or 'integral(' in left_expr:
-                    comparison = "Equal" if str(
-                        left_result) == right_expr else f"Difference: {left_result} vs {right_expr}"
-                    self._add_traceback('dual_comparison',
-                                        f'{left_expr} = {left_result}, expected {right_expr} -> {comparison}')
-                    result = f"{left_result}, {comparison}"
-                else:
-                    result = f"{left_result}, {right_result}"
-            else:
-                raise ValueError("Dual actions support exactly two parts separated by ','")
-        else:
-            result = self._compute_single(expr)
+        parts = expr.find(lambda x: x.is_Symbol)
+        ordered_parts = self._set_part_order(parts)
+        results = asyncio.run(self._compute_parts_parallel(ordered_parts))
+        self._add_traceback('compute_end', f'Results: {results}')
+        # return derivatives and other parts
+        return self._set_part_order(results)
 
-        self._add_traceback('result', f'Final result: {result}')
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        part_order = [{'part': 'calculus_result', 'value': str(result), 'bytes': packed_bytes}]
-        self.segment_manager.receive_part_order(self.__class__.__name__, f'calculus_{expr}', part_order)
-        return str(result)
+    @staticmethod
+    async def _compute_single_part(part):
+        """Stub: Compute single part, respecting priorities."""
+        if 'nest' in str(part):
+            return f"nested_{part}"
+        return part * 2
 
-    def _compute_single(self, expr):
-        """Helper: Compute a single calculus expression."""
-        if 'derivative(' in expr:
-            inner = expr.split('derivative(')[1].rstrip(')')
-            func_str, var_str = inner.split(', ')
-            func = sp.sympify(func_str)
-            var = sp.symbols(var_str)
-            return sp.diff(func, var)
-        elif 'integral(' in expr:
-            inner = expr.split('integral(')[1].rstrip(')')
-            func_str, var_str = inner.split(', ')
-            func = sp.sympify(func_str)
-            var = sp.symbols(var_str)
-            return sp.integrate(func, var)
-        elif 'second_derivative(' in expr:
-            inner = expr.split('second_derivative(')[1].rstrip(')')
-            func_str, var_str = inner.split(', ')
-            func = sp.sympify(func_str)
-            var = sp.symbols(var_str)
-            return sp.diff(func, var, 2)
-        elif 'limit(' in expr:
-            inner = expr.split('limit(')[1].rstrip(')')
-            func_str, var_str, point_str = inner.split(', ')
-            func = sp.sympify(func_str)
-            var = sp.symbols(var_str)
-            if point_str == 'infinity':
-                return sp.limit(func, var, sp.oo)
-            elif point_str == '-infinity':
-                return sp.limit(func, var, -sp.oo)
-            else:
-                return sp.limit(func, var, sp.sympify(point_str))
-        elif 'definite_integral(' in expr:
-            inner = expr.split('definite_integral(')[1].rstrip(')')
-            func_str, var_str, a_str, b_str = inner.split(', ')
-            func = sp.sympify(func_str)
-            var = sp.symbols(var_str)
-            a = sp.sympify(a_str)
-            b = sp.sympify(b_str)
-            return sp.integrate(func, (var, a, b))
-        elif 'product_rule(' in expr:
-            inner = expr.split('product_rule(')[1].rstrip(')')
-            u_str, v_str, var_str = inner.split(', ')
-            u = sp.sympify(u_str)
-            v = sp.sympify(v_str)
-            var = sp.symbols(var_str)
-            return sp.diff(u, var) * v + u * sp.diff(v, var)
-        elif 'quotient_rule(' in expr:
-            inner = expr.split('quotient_rule(')[1].rstrip(')')
-            u_str, v_str, var_str = inner.split(', ')
-            u = sp.sympify(u_str)
-            v = sp.sympify(v_str)
-            var = sp.symbols(var_str)
-            numerator = sp.diff(u, var) * v - u * sp.diff(v, var)
-            return numerator / (v ** 2)
-        elif 'chain_rule(' in expr:
-            inner = expr.split('chain_rule(')[1].rstrip(')')
-            outer_str, inner_str, var_str = inner.split(', ')
-            outer = sp.sympify(outer_str)
-            inner_func = sp.sympify(inner_str)
-            var = sp.symbols(var_str)
-            u = sp.symbols('u')
-            return sp.diff(outer.subs(u, inner_func), var).subs(u, inner_func)
-        elif 'integration_by_parts(' in expr:
-            inner = expr.split('integration_by_parts(')[1].rstrip(')')
-            u_str, dv_str, var_str = inner.split(', ')
-            u = sp.sympify(u_str)
-            dv = sp.sympify(dv_str)
-            var = sp.symbols(var_str)
-            v = sp.integrate(dv, var)
-            return u * v - sp.integrate(sp.diff(u, var) * v, var)
-        elif 'u_substitution(' in expr:
-            inner = expr.split('u_substitution(')[1].rstrip(')')
-            expr_str, u_str, du_str, var_str = inner.split(', ')
-            expr_func = sp.sympify(expr_str)
-            u = sp.sympify(u_str)
-            du = sp.sympify(du_str)
-            var = sp.symbols(var_str)
-            return sp.integrate(expr_func.subs(var, u), du)
-        else:
-            raise ValueError(f"Unsupported calculus expr: {expr}")
+    async def _compute_parts_parallel(self, parts):
+        """Helper: Compute all parts in parallel, using _set_part_order at start."""
+        ordered_parts = self._set_part_order(parts, apply_at_start=True)
+        tasks = [self._compute_single_part(part) for part in ordered_parts]
+        results = await asyncio.gather(*tasks)
+        # Apply again after return if needed
+        final_results = self._set_part_order(results, apply_after_return=True)
+        for i, result in enumerate(final_results):
+            self.segment_manager.receive_part_order(
+                self.__class__.__name__,
+                f'part_{i}',
+                [{'part': f'part_{i}', 'result': result}]
+            )
+        return final_results
 
     def __sub__(self, other):
         """Calculus sub."""
@@ -419,13 +384,26 @@ class CalculusEngine(MathEngine):
         self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
         return result
 
-    def _convert_and_pack(self, parts):
-        """Override: Handle symbolic expressions for packing."""
-        packed = bytearray()
+    def taylor_series_expansion(self, f, var, n):
+        """Compute Taylor series expansion of f up to order n."""
+        self._add_traceback('taylor_series_expansion', f'Taylor series expansion of {f} up to order {n}')
+        func = sp.sympify(f)
+        v = sp.symbols(var)
+        result = sp.series(func, v, n)
+
+    @staticmethod
+    def _convert_and_pack(parts):
+        """Convert and pack parts for sending to segment_manager.
+            Pre-encodes parts to bytes and accumulates in a cache.
+            If a part is a string, it is encoded as utf-8.
+            If a part is an int, it is converted to a byte string.
+            Strip brackets from strings.
+        """
+        byte_arrays = []
         for part in parts:
-            if isinstance(part, sp.Expr):
-                # Convert SymPy expr to string bytes
-                packed.extend(bytearray(str(part).encode('utf-8')))
+            if isinstance(part, str):
+                byte_arrays.append(part.encode('utf-8'))
             else:
-                packed.extend(super()._convert_and_pack([part]))
+                byte_arrays.append(str(part).encode('utf-8'))
+        packed = b''.join(byte_arrays)
         return packed

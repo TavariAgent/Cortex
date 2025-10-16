@@ -33,7 +33,7 @@ class Structure:
             'multiplication': False,
             'xor_op': True,
             'packing': False,
-            'engines_done': False,  # New: Flag for engine completion
+            'engines_done': False, #Flag for engine completion
         }
 
     async def _inform_structure(self):
@@ -65,13 +65,10 @@ class EngineWorker:
     
     async def run(self, task_config):
         """Run the engine with given task configuration."""
-        # Create engine instance if needed
         if self.engine_instance is None:
-            # Engines need segment_manager, create a stub if not provided
             if self.args:
                 self.engine_instance = self.engine_class(*self.args)
             else:
-                # Stub - in real use would need proper segment_manager
                 from segment_manager import SegmentManager
                 struct = Structure()
                 seg_mgr = SegmentManager(struct)
@@ -103,7 +100,6 @@ class ThreadedEngineManager:
             self.tasks.append(task)
         await asyncio.gather(*self.tasks)
         # Set engines_done flag
-        # Assuming access to Structure or pass flag updater
         # self.structure.flags['engines_done'] = True  # Link to Structure
 
 class XorStringCompiler:
