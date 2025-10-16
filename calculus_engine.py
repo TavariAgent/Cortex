@@ -1,13 +1,15 @@
 from abc import ABC, abstractmethod
 import asyncio
-import mpmath as mp
+from mpmath import mp
 import sympy as sp
 
 from packing_utils import convert_and_pack
+from precision_manager import get_dps
 from priority_rules import precedence_of
 from segment_manager import SegmentManager
 from slice_mixin import SliceMixin
 
+mp.dps = get_dps()
 
 class MathEngine(ABC):
     """Abstract base class for all math engines. Enables parallel computation with priority-flow helpers."""

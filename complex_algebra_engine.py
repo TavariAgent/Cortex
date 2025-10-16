@@ -1,12 +1,14 @@
 from abc import ABC, abstractmethod
 import asyncio
-import mpmath as mp
+from mpmath import mp
 
 from packing_utils import convert_and_pack
+from precision_manager import get_dps
 from priority_rules import precedence_of
 from segment_manager import SegmentManager
 from slice_mixin import SliceMixin
 
+mp.dps = get_dps()
 
 class MathEngine(ABC):
     """Abstract base class for all math engines. Enables parallel computation with priority-flow helpers."""
@@ -171,7 +173,6 @@ class ComplexAlgebraEngine(SliceMixin, MathEngine):
     def compute(self, expr):
         """Compute complex expressions, e.g., (1+2j)*(3+4j)."""
         self._add_traceback('compute_start', f'Expression: {expr}')
-        mp.dps = 50
 
         # Simple: parse basic complex ops (expand as needed)
         if '+' in expr and 'j' in expr:

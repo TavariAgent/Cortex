@@ -8,6 +8,8 @@ Type expressions like '2+3', 'sin(pi)', or 'derivative(x**2, x)'. Type 'quit' to
 import sys
 import os
 
+from precision_manager import presets, get_dps, set_dps
+
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -22,6 +24,8 @@ def main():
     print("Welcome to Cortex Calculator REPL")
     print("Type expressions (e.g., '2+3', 'sin(pi)', 'derivative(x**2, x)')")
     print("Type 'trace' to toggle traceback display")
+    print("Type 'precision' or 'p' to show current precision")
+    print("Type 'precision N' where N is one of", presets(), "to change precision")
     print("Type 'quit' to exit")
     print("=" * 80)
 
@@ -39,6 +43,25 @@ def main():
             if user_input.lower() == 'quit':
                 print("Goodbye!")
                 break
+
+            #  precision commands  ------------------------------------------------
+            if user_input.lower().startswith(('precision', 'p')):
+                parts = user_input.split()
+                if len(parts) == 1:
+                    print(f"Current precision: {get_dps()} dps")
+                elif len(parts) == 2:
+                    try:
+                        new_dps = int(parts[1])
+                        set_dps(new_dps)
+                        # refresh engine instances with new mp.dps
+                        engine = BasicArithmeticEngine(segment_mgr)
+                        print(f"Precision set to {new_dps} dps")
+                    except Exception as e:
+                        print(f"Error: {e}")
+                else:
+                    print("Usage: precision [N]")
+                continue
+
             if user_input.lower() == 'trace':
                 show_trace = not show_trace
                 print(f"Traceback display: {'ON' if show_trace else 'OFF'}")

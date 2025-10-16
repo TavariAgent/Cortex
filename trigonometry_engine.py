@@ -1,12 +1,14 @@
 from abc import ABC, abstractmethod
 import asyncio
-import mpmath as mp
+from mpmath import mp
 import sympy as sp
 
 from packing_utils import convert_and_pack
+from precision_manager import get_dps
 from priority_rules import precedence_of
 from slice_mixin import SliceMixin
 
+mp.dps = get_dps()
 
 class MathEngine(ABC):
     """Abstract base class for all math engines. Enables parallel computation with priority-flow helpers."""
@@ -16,11 +18,72 @@ class MathEngine(ABC):
         self.parallel_tasks = []
         self._cache = []  # Cache for packed bytes before sending to segment_manager
 
+    # ──────────────────────────────────────────────────────────────────
+    #  Exact-angle lookup
+    # ──────────────────────────────────────────────────────────────────
+    _ANGLE_TABLE = {
+        sp.Rational(0, 1):    {'sin': 0, 'cos': 1, 'tan': 0},
+        sp.Rational(1, 6):    {'sin': sp.Rational(1, 2),
+                               'cos': sp.sqrt(3)/2,
+                               'tan': sp.sqrt(3)/3},
+        sp.Rational(1, 4):    {'sin': sp.sqrt(2)/2,
+                               'cos': sp.sqrt(2)/2,
+                               'tan': 1},
+        sp.Rational(1, 3):    {'sin': sp.sqrt(3)/2,
+                               'cos': sp.Rational(1, 2),
+                               'tan': sp.sqrt(3)},
+        sp.Rational(1, 2):    {'sin': 1,
+                               'cos': 0,
+                               'tan': sp.oo},
+        sp.Rational(2, 3):    {'sin': sp.sqrt(3)/2,
+                               'cos': -sp.Rational(1, 2),
+                               'tan': -sp.sqrt(3)},
+        sp.Rational(3, 4):    {'sin':  sp.sqrt(2)/2,
+                               'cos': -sp.sqrt(2)/2,
+                               'tan': -1},
+        sp.Rational(5, 6):    {'sin':  sp.Rational(1, 2),
+                               'cos': -sp.sqrt(3)/2,
+                               'tan': -sp.sqrt(3)/3},
+        sp.Rational(1, 1):    {'sin': 0,
+                               'cos': -1,
+                               'tan': 0},
+        # Add more multiples if desired
+    }
+
+    @classmethod
+    def _lookup_exact(cls, arg_mpf):
+        """
+        Try to convert arg (mp.mpf) into a SymPy Rational multiple of π.
+        If found in table, return (True, sin_val, cos_val, tan_val),
+        else (False, None, None, None).
+        """
+        # Convert mp.mpf → SymPy Float with current precision
+        sp_val = sp.nsimplify(arg_mpf, [sp.pi])
+        if isinstance(sp_val, sp.Mul) and sp.pi in sp_val.args:
+            ratio = sp_val / sp.pi
+        elif sp_val == 0:
+            ratio = sp.Rational(0, 1)
+        else:
+            return False, None, None, None
+
+        # Reduce modulo 2π (ratio modulo 2)
+        ratio = sp.fraction(ratio)[0] % 2  # numerator mod 2
+        if ratio > 1:
+            ratio -= 2  # map to (-1,1]
+        ratio = sp.Rational(ratio).limit_denominator()
+
+        if ratio in cls._ANGLE_TABLE:
+            entry = cls._ANGLE_TABLE[ratio]
+            return True, entry['sin'], entry['cos'], entry['tan']
+        return False, None, None, None
+
+
     @abstractmethod
     def compute(self, expr):
         """Parallel compute method: Calculate all available parts simultaneously, respecting primary level."""
         pass
 
+    @staticmethod
     async def _compute_single_part(self, part):
         """Stub: Compute single part, respecting priorities."""
         if 'nest' in str(part):
@@ -92,6 +155,7 @@ class TrigonometryEngine(SliceMixin, MathEngine):
         if len(tokens) != 1:
             raise ValueError(f'Could not resolve slice: {tokens}')
         return mp.mpf(tokens[0])
+
 
     def _linear_tokenize(self, flat_expr: str):
         """Simple left-to-right tokenizer for numbers and operators (no parens)."""
@@ -171,51 +235,63 @@ class TrigonometryEngine(SliceMixin, MathEngine):
         return convert_and_pack(parts, twos_complement=twos_complement)
 
     @staticmethod
-    def snap_to_angle(arg):
-        """Snap arg to common angles for exact trig results (avoids mpmath approximations)."""
-        if abs(arg - 0) < 1e-10:
-            return 0
-        if abs(arg - mp.pi) < 1e-10:
-            return mp.pi
-        if abs(arg - mp.pi/2) < 1e-10:
-            return mp.pi/2
-        if abs(arg - mp.pi/4) < 1e-10:
-            return mp.pi/4
-        # Add more as needed (e.g., 2*pi, etc.)
+    def snap_to_angle(arg, *, max_multiple: int = 4):
+        """
+        Return an *exact* multiple of π/4 (covers π/2, π) when the input
+        is within an adaptive tolerance; otherwise return arg unchanged.
+
+        The tolerance scales with current mp.dps so that, whether you run at
+        50 dps or one million, “almost-π” will still be captured.
+        """
+        # 10 ulps worth of slack at the current precision
+        tol = mp.mpf(10) ** (-mp.dps + 1)
+
+        # Work in units of π/4                   (0, ¼π, ½π, ¾π, π, …)
+        unit = mp.pi / 4
+        ratio = arg / unit
+        nearest = mp.nint(ratio)                # nearest integer
+
+        # Only snap small multiples (avoids wrapping very large arguments)
+        if abs(nearest) <= max_multiple * 4 and mp.fabs(ratio - nearest) < tol:
+            return nearest * unit
+
         return arg
 
     def compute(self, expr):
         """Compute trig expressions with symbolic arg evaluation, pi recognition, and angle snapping."""
         self._add_traceback('compute_start', f'Expression: {expr}')
-        mp.dps = 50
-
-        # Simple: assume expr is like 'cos(pi/2)'
         if 'sin(' in expr:
             arg_str = expr.split('sin(')[1].rstrip(')')
             try:
-                arg = mp.mpf(str(sp.N(sp.sympify(arg_str))))  # Evaluate symbolic expressions numerically
-            except:
+                sym_expr = sp.sympify(arg_str)
+                num      = sym_expr.evalf(mp.dps)     # use active precision
+                arg      = mp.mpf(str(num))
+            except Exception:
                 raise ValueError(f"Invalid argument: {arg_str}")
             arg = self.snap_to_angle(arg)
             result = mp.sin(arg)
         elif 'cos(' in expr:
             arg_str = expr.split('cos(')[1].rstrip(')')
             try:
-                arg = mp.mpf(str(sp.N(sp.sympify(arg_str))))
-            except:
+                sym_expr = sp.sympify(arg_str)
+                num      = sym_expr.evalf(mp.dps)
+                arg      = mp.mpf(str(num))
+            except Exception:
                 raise ValueError(f"Invalid argument: {arg_str}")
             arg = self.snap_to_angle(arg)
             result = mp.cos(arg)
         elif 'tan(' in expr:
             arg_str = expr.split('tan(')[1].rstrip(')')
             try:
-                arg = mp.mpf(str(sp.N(sp.sympify(arg_str))))
-            except:
+                sym_expr = sp.sympify(arg_str)
+                num      = sym_expr.evalf(mp.dps)
+                arg      = mp.mpf(str(num))
+            except Exception:
                 raise ValueError(f"Invalid argument: {arg_str}")
             arg = self.snap_to_angle(arg)
             result = mp.tan(arg)
         else:
-            raise ValueError(f"Unsupported trig expr: {expr}")
+            raise ValueError(f"Unsupported trig expression: {expr}")
 
         self._add_traceback('result', f'Trig result: {result}')
         packed_bytes = str(result).encode('utf-8')

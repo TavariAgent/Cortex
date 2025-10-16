@@ -2,14 +2,17 @@ import functools
 from abc import ABC, abstractmethod
 import asyncio
 import numpy as np
-import mpmath as mp
+from mpmath import mp
 from decimal import Decimal
 from sympy import sympify, nsimplify, srepr
 
 from packing_utils import convert_and_pack
+from precision_manager import get_dps
 from priority_rules import precedence_of
 from segment_manager import SegmentManager
 from slice_mixin import SliceMixin
+
+mp.dps = get_dps()
 
 class MathEngine(ABC):
     """Abstract base class for all math engines. Enables parallel computation with priority-flow helpers."""
@@ -19,8 +22,6 @@ class MathEngine(ABC):
         self.parallel_tasks = []
         self._cache = []  # Cache for packed bytes before sending to segment_manager
         # Set high precision
-        mp.dps = 50
-
 
     @staticmethod
     def _set_part_order(parts, apply_at_start=True, apply_after_return=False):
@@ -99,7 +100,6 @@ class BasicArithmeticEngine(SliceMixin, MathEngine):
         self.traceback_info = []  # For step-wise debug info
         self._value = "0"  # Default value for chaining
         # _cache is inherited from MathEngine
-        mp.dps = 50
 
     # ------------------------------------------------------------------
     # SliceMixin requirement: how to actually evaluate *one* slice
