@@ -146,32 +146,118 @@ class CalculusEngine(MathEngine):
         })
 
     def compute(self, expr):
-        """Compute calculus expressions, e.g., derivative(x**2, x)."""
+        """Compute calculus expressions, supporting dual actions like derivative(x**2, x), 2*x."""
         self._add_traceback('compute_start', f'Expression: {expr}')
 
-        # Simple: assume expr like 'derivative(x**2, x)'
-        if 'derivative(' in expr:
-            inner = expr.split('derivative(')[1].rstrip(')')
-            func_str, var_str = inner.split(', ')
-            func = sp.sympify(func_str)
-            var = sp.symbols(var_str)
-            result = sp.diff(func, var)
-        elif 'integral(' in expr:
-            inner = expr.split('integral(')[1].rstrip(')')
-            func_str, var_str = inner.split(', ')
-            func = sp.sympify(func_str)
-            var = sp.symbols(var_str)
-            result = sp.integrate(func, var)
+        # Check for dual action (comma-separated)
+        if ',' in expr:
+            parts = [p.strip() for p in expr.split(',')]
+            if len(parts) == 2:
+                left_expr, right_expr = parts
+                left_result = self._compute_single(left_expr)
+                right_result = self._compute_single(right_expr)
+                # For verification: if left is derivative/integral, compare to right
+                if 'derivative(' in left_expr or 'integral(' in left_expr:
+                    comparison = "Equal" if str(
+                        left_result) == right_expr else f"Difference: {left_result} vs {right_expr}"
+                    self._add_traceback('dual_comparison',
+                                        f'{left_expr} = {left_result}, expected {right_expr} -> {comparison}')
+                    result = f"{left_result}, {comparison}"
+                else:
+                    result = f"{left_result}, {right_result}"
+            else:
+                raise ValueError("Dual actions support exactly two parts separated by ','")
         else:
-            raise ValueError(f"Unsupported calculus expr: {expr}")
+            result = self._compute_single(expr)
 
-        self._add_traceback('result', f'Calculus result: {result}')
+        self._add_traceback('result', f'Final result: {result}')
         packed_bytes = str(result).encode('utf-8')
         self._cache.append(packed_bytes)
         self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
         part_order = [{'part': 'calculus_result', 'value': str(result), 'bytes': packed_bytes}]
         self.segment_manager.receive_part_order(self.__class__.__name__, f'calculus_{expr}', part_order)
         return str(result)
+
+    def _compute_single(self, expr):
+        """Helper: Compute a single calculus expression."""
+        if 'derivative(' in expr:
+            inner = expr.split('derivative(')[1].rstrip(')')
+            func_str, var_str = inner.split(', ')
+            func = sp.sympify(func_str)
+            var = sp.symbols(var_str)
+            return sp.diff(func, var)
+        elif 'integral(' in expr:
+            inner = expr.split('integral(')[1].rstrip(')')
+            func_str, var_str = inner.split(', ')
+            func = sp.sympify(func_str)
+            var = sp.symbols(var_str)
+            return sp.integrate(func, var)
+        elif 'second_derivative(' in expr:
+            inner = expr.split('second_derivative(')[1].rstrip(')')
+            func_str, var_str = inner.split(', ')
+            func = sp.sympify(func_str)
+            var = sp.symbols(var_str)
+            return sp.diff(func, var, 2)
+        elif 'limit(' in expr:
+            inner = expr.split('limit(')[1].rstrip(')')
+            func_str, var_str, point_str = inner.split(', ')
+            func = sp.sympify(func_str)
+            var = sp.symbols(var_str)
+            if point_str == 'infinity':
+                return sp.limit(func, var, sp.oo)
+            elif point_str == '-infinity':
+                return sp.limit(func, var, -sp.oo)
+            else:
+                return sp.limit(func, var, sp.sympify(point_str))
+        elif 'definite_integral(' in expr:
+            inner = expr.split('definite_integral(')[1].rstrip(')')
+            func_str, var_str, a_str, b_str = inner.split(', ')
+            func = sp.sympify(func_str)
+            var = sp.symbols(var_str)
+            a = sp.sympify(a_str)
+            b = sp.sympify(b_str)
+            return sp.integrate(func, (var, a, b))
+        elif 'product_rule(' in expr:
+            inner = expr.split('product_rule(')[1].rstrip(')')
+            u_str, v_str, var_str = inner.split(', ')
+            u = sp.sympify(u_str)
+            v = sp.sympify(v_str)
+            var = sp.symbols(var_str)
+            return sp.diff(u, var) * v + u * sp.diff(v, var)
+        elif 'quotient_rule(' in expr:
+            inner = expr.split('quotient_rule(')[1].rstrip(')')
+            u_str, v_str, var_str = inner.split(', ')
+            u = sp.sympify(u_str)
+            v = sp.sympify(v_str)
+            var = sp.symbols(var_str)
+            numerator = sp.diff(u, var) * v - u * sp.diff(v, var)
+            return numerator / (v ** 2)
+        elif 'chain_rule(' in expr:
+            inner = expr.split('chain_rule(')[1].rstrip(')')
+            outer_str, inner_str, var_str = inner.split(', ')
+            outer = sp.sympify(outer_str)
+            inner_func = sp.sympify(inner_str)
+            var = sp.symbols(var_str)
+            u = sp.symbols('u')
+            return sp.diff(outer.subs(u, inner_func), var).subs(u, inner_func)
+        elif 'integration_by_parts(' in expr:
+            inner = expr.split('integration_by_parts(')[1].rstrip(')')
+            u_str, dv_str, var_str = inner.split(', ')
+            u = sp.sympify(u_str)
+            dv = sp.sympify(dv_str)
+            var = sp.symbols(var_str)
+            v = sp.integrate(dv, var)
+            return u * v - sp.integrate(sp.diff(u, var) * v, var)
+        elif 'u_substitution(' in expr:
+            inner = expr.split('u_substitution(')[1].rstrip(')')
+            expr_str, u_str, du_str, var_str = inner.split(', ')
+            expr_func = sp.sympify(expr_str)
+            u = sp.sympify(u_str)
+            du = sp.sympify(du_str)
+            var = sp.symbols(var_str)
+            return sp.integrate(expr_func.subs(var, u), du)
+        else:
+            raise ValueError(f"Unsupported calculus expr: {expr}")
 
     def __sub__(self, other):
         """Calculus sub."""

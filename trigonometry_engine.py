@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 import asyncio
 import mpmath as mp
-from segment_manager import SegmentManager
+import sympy as sp
 
 
 class MathEngine(ABC):
@@ -159,24 +159,33 @@ class TrigonometryEngine(MathEngine):
         return arg
 
     def compute(self, expr):
-        """Compute trig expressions with pi recognition and angle snapping."""
+        """Compute trig expressions with symbolic arg evaluation, pi recognition, and angle snapping."""
         self._add_traceback('compute_start', f'Expression: {expr}')
         mp.dps = 50
 
-        # Simple: assume expr is like 'cos(pi)'
+        # Simple: assume expr is like 'cos(pi/2)'
         if 'sin(' in expr:
             arg_str = expr.split('sin(')[1].rstrip(')')
-            arg = mp.pi if arg_str == 'pi' else mp.mpf(arg_str)
+            try:
+                arg = mp.mpf(str(sp.N(sp.sympify(arg_str))))  # Evaluate symbolic expressions numerically
+            except:
+                raise ValueError(f"Invalid argument: {arg_str}")
             arg = self.snap_to_angle(arg)
             result = mp.sin(arg)
         elif 'cos(' in expr:
             arg_str = expr.split('cos(')[1].rstrip(')')
-            arg = mp.pi if arg_str == 'pi' else mp.mpf(arg_str)
+            try:
+                arg = mp.mpf(str(sp.N(sp.sympify(arg_str))))
+            except:
+                raise ValueError(f"Invalid argument: {arg_str}")
             arg = self.snap_to_angle(arg)
             result = mp.cos(arg)
         elif 'tan(' in expr:
             arg_str = expr.split('tan(')[1].rstrip(')')
-            arg = mp.pi if arg_str == 'pi' else mp.mpf(arg_str)
+            try:
+                arg = mp.mpf(str(sp.N(sp.sympify(arg_str))))
+            except:
+                raise ValueError(f"Invalid argument: {arg_str}")
             arg = self.snap_to_angle(arg)
             result = mp.tan(arg)
         else:
