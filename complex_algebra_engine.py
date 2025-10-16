@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 import asyncio
 import mpmath as mp
+
+from packing_utils import convert_and_pack
 from segment_manager import SegmentManager
 
 
@@ -88,39 +90,9 @@ class MathEngine(ABC):
         self.segment_manager.receive_part_order(self.__class__.__name__, slice_data, part_order)
         return self  # Or metadata
 
-    def _convert_and_pack(self, parts):
-        """Helper method: Convert multi-part inputs to byte arrays, pre-pack for intra-engine ops, and prepare for __add__ to segment manager.
-
-        This handles conversions during expression stages, producing new values to pre-pack.
-        Engines can override for specific logic (e.g., numerical vs. symbolic).
-        Returns a pre-packed value ready for XOR sub-directory segment handling.
-        """
-        # Stub: Default conversion logic
-        byte_arrays = []
-        for part in parts:
-            if isinstance(part, int):
-                # Convert to byte string (big-endian, with liberal allocation)
-                byte_str = str(part).encode('utf-8')
-                byte_arrays.append(bytearray(byte_str))
-            elif isinstance(part, str):
-                byte_arrays.append(bytearray(part.encode('utf-8')))
-            elif isinstance(part, complex):
-                # For complex: pack real and imag separately
-                real_bytes = bytearray(str(part.real).encode('utf-8'))
-                imag_bytes = bytearray(str(part.imag).encode('utf-8'))
-                byte_arrays.extend([real_bytes, imag_bytes])
-            else:
-                # Fallback: assume bytes or convertible
-                byte_arrays.append(bytearray(str(part).encode('utf-8')))
-
-        # Pre-pack: Combine into a single bytearray (simple concatenation; engines can customize)
-        packed = bytearray()
-        for ba in byte_arrays:
-            packed.extend(ba)
-
-        # Return pre-packed value for __add__ to segment manager (via XOR sub-dir)
-        return packed
-
+    @staticmethod
+    def _convert_and_pack(parts, *, twos_complement=False):
+        return convert_and_pack(parts, twos_complement=twos_complement)
 
 class ComplexAlgebraEngine(MathEngine):
     """Handles complex numbers: real + imag*j. Overloads for complex ops."""
@@ -188,11 +160,6 @@ class ComplexAlgebraEngine(MathEngine):
         self._add_traceback('__pow__', f'Complex pow: {other}')
         # Implement complex exponentiation
         return self
-
-    def _convert_and_pack(self, parts):
-        """Override: Pack complex parts efficiently."""
-        # Use default but ensure complex handling
-        return super()._convert_and_pack(parts)
 
     def call_helper(self, expr):
         """Dynamic helper: Route mixed expressions to appropriate engines and send results to segment_pools."""

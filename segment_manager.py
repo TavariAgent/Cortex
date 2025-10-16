@@ -1,3 +1,6 @@
+from flag_bus import FlagBus
+
+
 class SegmentManager:
     """Manages segments with parallel part assembly, left-to-right on same level, and structure-defined ordering."""
 
@@ -24,6 +27,7 @@ class SegmentManager:
     def receive_packed_segment(self, engine_name, packed_bytes):
         """Accumulate packed byte arrays from engines."""
         if engine_name not in self.segment_pools:
+            FlagBus.set('last_pack_from', engine_name)
             self.segment_pools[engine_name] = []
         self.segment_pools[engine_name].append(packed_bytes)
 

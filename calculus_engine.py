@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 import asyncio
 import mpmath as mp
 import sympy as sp
+
+from packing_utils import convert_and_pack
 from segment_manager import SegmentManager
 
 
@@ -69,6 +71,10 @@ class MathEngine(ABC):
         self.segment_manager.receive_part_order(self.__class__.__name__, slice_data, part_order)
         return self  # Or metadata
 
+    @staticmethod
+    def _convert_and_pack(parts, *, twos_complement=False):
+        return convert_and_pack(parts, twos_complement=twos_complement)
+
 
 class CalculusEngine(MathEngine):
     """Handles derivatives, integrals, limits. Heavily relies on SymPy."""
@@ -95,18 +101,46 @@ class CalculusEngine(MathEngine):
     def compute(self, expr):
         """Compute calculus expressions."""
         self._add_traceback('compute_start', f'Expression: {expr}')
-        expr = sp.sympify(expr)
+        # Map lowercase aliases → SymPy classes so ‘derivative(...)’ etc. are recognised.
+        expr = sp.sympify(
+            expr,
+            locals={
+                'derivative': sp.Derivative,
+                'integral': sp.Integral,
+                'limit': sp.Limit,
+            },  # type: ignore[arg-type]
+        )
+        parts = []
+
+        # ------------------------------------------------------------------
+        # 1️⃣ Fast path ─── the whole expression *is* a Derivative
+        # ------------------------------------------------------------------
+        if isinstance(expr, sp.Derivative):
+            # Evaluate it directly and return; no extra diff-of-diff.
+            result = expr.doit()
+            self._add_traceback(
+                'compute_derivative_direct',
+                f'{expr} -> {result}'
+            )
+            packed_bytes = str(result).encode('utf-8')
+            self._cache.append(packed_bytes)
+            self.segment_manager.receive_packed_segment(self.__class__.__name__,
+                                                        packed_bytes)
+            return result
+
+        # ------------------------------------------------------------------
+        # 2️⃣ Mixed expression that *contains* derivatives
+        # ------------------------------------------------------------------
+        if expr.has(sp.Derivative):
+            # Evaluate only the inner Derivative nodes, keep outer structure.
+            expr = expr.doit(deep=False)
+            self._add_traceback(
+                'compute_inner_derivatives',
+                f'Inner derivatives evaluated -> {expr}'
+            )
         if expr.is_Symbol:
             self._value = str(expr)
-            # Calculate derivative
-            parts = expr.find(lambda x: x.is_Derivative)
-            self._add_traceback(
-                'compute_derivative',
-                f'Calculus expression: {expr}, Derivative: {parts}'
-            )
-            if parts:
-                return self.derivative(str(expr), self._value)
-                # Calculate integral
+            # Calculate integral
             parts = expr.find(lambda x: x.is_Integral)
             self._add_traceback(
                 'compute_integral',
@@ -122,14 +156,6 @@ class CalculusEngine(MathEngine):
             )
             if parts:
                 return self.limit(str(expr), self._value, 'infinity')
-                # Calculate second derivative
-            parts = expr.find(lambda x: x.is_SecondDerivative)
-            self._add_traceback(
-                'compute_second_derivative',
-                f'Calculus expression: {expr}, Second Derivative: {parts}'
-            )
-            if parts:
-                return self.second_derivative(str(expr), self._value)
                 # Calculate Critical Points
             parts = expr.find(lambda x: x.is_Function)
             self._add_traceback(
@@ -194,14 +220,12 @@ class CalculusEngine(MathEngine):
             )
             if parts:
                 return self.taylor_series_expansion(str(expr), 'f', self._value)
-            return self._value
 
-        parts = expr.find(lambda x: x.is_Symbol)
         ordered_parts = self._set_part_order(parts)
         results = asyncio.run(self._compute_parts_parallel(ordered_parts))
+        ordered = self._set_part_order(results)
         self._add_traceback('compute_end', f'Results: {results}')
-        # return derivatives and other parts
-        return self._set_part_order(results)
+        return ordered[0] if len(ordered) == 1 else ordered
 
     @staticmethod
     async def _compute_single_part(part):
@@ -390,20 +414,3 @@ class CalculusEngine(MathEngine):
         func = sp.sympify(f)
         v = sp.symbols(var)
         result = sp.series(func, v, n)
-
-    @staticmethod
-    def _convert_and_pack(parts):
-        """Convert and pack parts for sending to segment_manager.
-            Pre-encodes parts to bytes and accumulates in a cache.
-            If a part is a string, it is encoded as utf-8.
-            If a part is an int, it is converted to a byte string.
-            Strip brackets from strings.
-        """
-        byte_arrays = []
-        for part in parts:
-            if isinstance(part, str):
-                byte_arrays.append(part.encode('utf-8'))
-            else:
-                byte_arrays.append(str(part).encode('utf-8'))
-        packed = b''.join(byte_arrays)
-        return packed

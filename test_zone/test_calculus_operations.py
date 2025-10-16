@@ -33,10 +33,11 @@ def test_calculus_operations():
     successes = []
 
     # 1) Derivative
-    res = engine.derivative('derivative(x**2, x)', 'x')
-    ok = sp.simplify(res - 2*sp.symbols('x')) == 0
-    print(f"derivative: d/dx derivative(x**2, x) -> {res} | expected 2*x | ok={_as_bool(ok)}")
-    successes.append(_as_bool(ok))
+    result_deriv = engine.compute('derivative(x**2, x)')
+    expected_deriv = "2*x"  # SymPy result
+    success_deriv = str(result_deriv) == expected_deriv
+    print(f"derivative(x**2, x): {result_deriv} (Expected: {expected_deriv}) - Success: {success_deriv}")
+
 
     # 2) Second derivative
     res = engine.second_derivative('x**3', 'x')

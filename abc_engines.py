@@ -1,11 +1,12 @@
 import functools
 from abc import ABC, abstractmethod
 import asyncio
-import math
-import sympy as sp
 import numpy as np
 import mpmath as mp
 from decimal import Decimal
+from sympy import sympify, nsimplify, srepr
+
+from packing_utils import convert_and_pack
 from segment_manager import SegmentManager
 
 
@@ -16,11 +17,9 @@ class MathEngine(ABC):
         self.segment_manager = segment_manager
         self.parallel_tasks = []
         self._cache = []  # Cache for packed bytes before sending to segment_manager
+        # Set high precision
+        mp.dps = 50
 
-    @abstractmethod
-    def compute(self, expr):
-        """Parallel compute method: Calculate all available parts simultaneously, respecting primary level."""
-        pass
 
     @staticmethod
     def _set_part_order(parts, apply_at_start=True, apply_after_return=False):
@@ -86,38 +85,9 @@ class MathEngine(ABC):
     def __pow__(self, other):
         pass
 
-    def _convert_and_pack(self, parts):
-        """Helper method: Convert multi-part inputs to byte arrays, pre-pack for intra-engine ops, and prepare for __add__ to segment manager.
-
-        This handles conversions during expression stages, producing new values to pre-pack.
-        Engines can override for specific logic (e.g., numerical vs. symbolic).
-        Returns a pre-packed value ready for XOR sub-directory segment handling.
-        """
-        # Stub: Default conversion logic
-        byte_arrays = []
-        for part in parts:
-            if isinstance(part, int):
-                # Convert to byte string (big-endian, with liberal allocation)
-                byte_str = str(part).encode('utf-8')
-                byte_arrays.append(bytearray(byte_str))
-            elif isinstance(part, str):
-                byte_arrays.append(bytearray(part.encode('utf-8')))
-            elif isinstance(part, complex):
-                # For complex: pack real and imag separately
-                real_bytes = bytearray(str(part.real).encode('utf-8'))
-                imag_bytes = bytearray(str(part.imag).encode('utf-8'))
-                byte_arrays.extend([real_bytes, imag_bytes])
-            else:
-                # Fallback: assume bytes or convertible
-                byte_arrays.append(bytearray(str(part).encode('utf-8')))
-
-        # Pre-pack: Combine into a single bytearray (simple concatenation; engines can customize)
-        packed = bytearray()
-        for ba in byte_arrays:
-            packed.extend(ba)
-
-        # Return pre-packed value for __add__ to segment manager (via XOR sub-dir)
-        return packed
+    @staticmethod
+    def _convert_and_pack(parts, *, twos_complement=False):
+        return convert_and_pack(parts, twos_complement=twos_complement)
 
 
 class BasicArithmeticEngine(MathEngine):
@@ -429,6 +399,7 @@ class BasicArithmeticEngine(MathEngine):
                 i += 1
         return result
 
+    @staticmethod
     def _detect_functions(self, tokens):
         """Detect and mark functions in tokens."""
         result = []
@@ -448,6 +419,17 @@ class BasicArithmeticEngine(MathEngine):
                 i += 1
         return result
 
+    @staticmethod
+    def _is_pure_symbolic_arithmetic(expr: str) -> bool:
+        """Return True iff expr is made only of '+-*/^', numbers,
+        SymPy named constants, or symbols – i.e. no functions."""
+        try:
+            tree = sympify(expr, convert_xor=True, evaluate=False)
+        except Exception:
+            return False
+        return all(node.is_Atom or node.is_Pow or node.is_Add or node.is_Mul
+                   for node in tree.args + (tree,))
+
     def compute(self, expr):
         """Parse and compute arithmetic expressions with full PEMDAS support.
 
@@ -457,11 +439,15 @@ class BasicArithmeticEngine(MathEngine):
         """
         self._add_traceback('compute_start', f'Expression: {expr}')
 
-        # Set high precision
-        mp.dps = 50
-
         # Parse the expression
         expr = expr.strip()
+        if self._is_pure_symbolic_arithmetic(expr):
+            sym_res = sympify(expr).evalf(mp.dps)
+            self._add_traceback('sym_eval', f'SymPy direct: {sym_res}')
+            packed = self._convert_and_pack([sym_res])
+            self._cache.append(packed)
+            self.segment_manager.receive_packed_segment(self.__class__.__name__, packed)
+            return str(sym_res)
 
         # Tokenize the expression
         tokens = self._tokenize(expr)
@@ -716,12 +702,3 @@ class BasicArithmeticEngine(MathEngine):
             return str(num_mp / den_mp)
 
         return div_func
-
-    def _convert_and_pack(self, parts):
-        """Override: Use str conversions to avoid floats."""
-        packed = super()._convert_and_pack(parts)
-        # Additional: Ensure str packing (no Decimal/float here)
-        str_parts = [str(p) for p in parts if isinstance(p, int)]
-        if str_parts:
-            packed.extend(b'STR_PACK:' + ','.join(str_parts).encode('utf-8'))
-        return packed

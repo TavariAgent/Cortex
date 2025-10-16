@@ -2,6 +2,7 @@ import asyncio
 from collections import defaultdict
 
 from abc_engines import BasicArithmeticEngine
+from flag_bus import FlagBus
 from trigonometry_engine import TrigonometryEngine
 
 
@@ -32,9 +33,12 @@ class Structure:
             'addition': False,
             'multiplication': False,
             'xor_op': True,
-            'packing': False,
             'engines_done': False, #Flag for engine completion
         }
+        self.flags.update({
+            'packing': FlagBus.get('packing', False),
+            'last_pack_from': FlagBus.get('last_pack_from')
+        })
 
     async def _inform_structure(self):
         # Simulate async flag updates
