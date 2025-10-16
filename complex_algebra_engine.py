@@ -3,7 +3,9 @@ import asyncio
 import mpmath as mp
 
 from packing_utils import convert_and_pack
+from priority_rules import precedence_of
 from segment_manager import SegmentManager
+from slice_mixin import SliceMixin
 
 
 class MathEngine(ABC):
@@ -94,13 +96,63 @@ class MathEngine(ABC):
     def _convert_and_pack(parts, *, twos_complement=False):
         return convert_and_pack(parts, twos_complement=twos_complement)
 
-class ComplexAlgebraEngine(MathEngine):
+class ComplexAlgebraEngine(SliceMixin, MathEngine):
     """Handles complex numbers: real + imag*j. Overloads for complex ops."""
 
     def __init__(self, segment_manager):
         super().__init__(segment_manager)
         self.traceback_info = []
         self._value = "0+0j"  # Default complex
+
+    # ------------------------------------------------------------------
+    # SliceMixin requirement: how to actually evaluate *one* slice
+    # ------------------------------------------------------------------
+    def _evaluate_atom(self, slice_text: str):
+        """
+        Evaluate a slice that now contains *no parentheses*.
+        Handle ^, *, /, +, - with mpmath high precision.
+        """
+        tokens = self._linear_tokenize(slice_text)      # NEW helper below
+        # Apply operator precedence using priority_rules.py
+        for op_level in [4, 3, 2]:                      # ^  then */  then +-
+            i = 0
+            while i < len(tokens):
+                if precedence_of(tokens[i]) == op_level:
+                    left = mp.mpf(tokens[i-1]); right = mp.mpf(tokens[i+1])
+                    if tokens[i] == '^':
+                        val = mp.power(left, right)
+                    elif tokens[i] == '*':
+                        val = left * right
+                    elif tokens[i] == '/':
+                        val = left / right
+                    elif tokens[i] == '+':
+                        val = left + right
+                    else:
+                        val = left - right
+                    tokens = tokens[:i-1] + [str(val)] + tokens[i+2:]
+                else:
+                    i += 1
+        if len(tokens) != 1:
+            raise ValueError(f'Could not resolve slice: {tokens}')
+        return mp.mpf(tokens[0])
+
+    def _linear_tokenize(self, flat_expr: str):
+        """Simple left-to-right tokenizer for numbers and operators (no parens)."""
+        out, cur = [], ''
+        for ch in flat_expr:
+            if ch.isdigit() or ch == '.':
+                cur += ch
+            elif ch in '+-*/^':
+                if cur:
+                    out.append(cur); cur = ''
+                out.append(ch)
+            elif ch == ' ':
+                continue
+            else:
+                raise ValueError(f'Unexpected char {ch}')
+        if cur:
+            out.append(cur)
+        return out
 
     def _add_traceback(self, step, info):
         """Add step-wise traceback for debugging."""
@@ -160,32 +212,3 @@ class ComplexAlgebraEngine(MathEngine):
         self._add_traceback('__pow__', f'Complex pow: {other}')
         # Implement complex exponentiation
         return self
-
-    def call_helper(self, expr):
-        """Dynamic helper: Route mixed expressions to appropriate engines and send results to segment_pools."""
-        # Determine engine based on keywords
-        if 'sin' in expr or 'cos' in expr or 'tan' in expr:
-            from trigonometry_engine import TrigonometryEngine
-            engine = TrigonometryEngine(self.segment_manager)
-        elif 'derivative' in expr or 'integral' in expr:
-            from calculus_engine import CalculusEngine
-            engine = CalculusEngine(self.segment_manager)
-        elif 'j' in expr or ('+' in expr and 'j' in expr):
-            engine = ComplexAlgebraEngine(self.segment_manager)
-        else:
-            # Default to basic arithmetic for numeric/symbolic mixes
-            from abc_engines import BasicArithmeticEngine
-            engine = BasicArithmeticEngine(self.segment_manager)
-
-        # Compute result
-        result = engine.compute(expr)
-
-        # Pack as mixed result (e.g., 'mixed:result') and send to segment_pools
-        mixed_packed = f"mixed:{result}".encode('utf-8')
-        self.segment_manager.receive_packed_segment('CallHelper', mixed_packed)
-
-        # Optional: Send part_order for deeper control
-        part_order = [{'part': 'mixed_result', 'value': str(result), 'bytes': mixed_packed}]
-        self.segment_manager.receive_part_order('CallHelper', f'mixed_{expr}', part_order)
-
-        return result

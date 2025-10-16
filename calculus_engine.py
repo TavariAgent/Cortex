@@ -4,7 +4,9 @@ import mpmath as mp
 import sympy as sp
 
 from packing_utils import convert_and_pack
+from priority_rules import precedence_of
 from segment_manager import SegmentManager
+from slice_mixin import SliceMixin
 
 
 class MathEngine(ABC):
@@ -76,13 +78,63 @@ class MathEngine(ABC):
         return convert_and_pack(parts, twos_complement=twos_complement)
 
 
-class CalculusEngine(MathEngine):
+class CalculusEngine(SliceMixin, MathEngine):
     """Handles derivatives, integrals, limits. Heavily relies on SymPy."""
 
     def __init__(self, segment_manager):
         super().__init__(segment_manager)
         self.traceback_info = []
         self._value = "x"  # Default symbolic var
+
+    # ------------------------------------------------------------------
+    # SliceMixin requirement: how to actually evaluate *one* slice
+    # ------------------------------------------------------------------
+    def _evaluate_atom(self, slice_text: str):
+        """
+        Evaluate a slice that now contains *no parentheses*.
+        Handle ^, *, /, +, - with mpmath high precision.
+        """
+        tokens = self._linear_tokenize(slice_text)      # NEW helper below
+        # Apply operator precedence using priority_rules.py
+        for op_level in [4, 3, 2]:                      # ^  then */  then +-
+            i = 0
+            while i < len(tokens):
+                if precedence_of(tokens[i]) == op_level:
+                    left = mp.mpf(tokens[i-1]); right = mp.mpf(tokens[i+1])
+                    if tokens[i] == '^':
+                        val = mp.power(left, right)
+                    elif tokens[i] == '*':
+                        val = left * right
+                    elif tokens[i] == '/':
+                        val = left / right
+                    elif tokens[i] == '+':
+                        val = left + right
+                    else:
+                        val = left - right
+                    tokens = tokens[:i-1] + [str(val)] + tokens[i+2:]
+                else:
+                    i += 1
+        if len(tokens) != 1:
+            raise ValueError(f'Could not resolve slice: {tokens}')
+        return mp.mpf(tokens[0])
+
+    def _linear_tokenize(self, flat_expr: str):
+        """Simple left-to-right tokenizer for numbers and operators (no parens)."""
+        out, cur = [], ''
+        for ch in flat_expr:
+            if ch.isdigit() or ch == '.':
+                cur += ch
+            elif ch in '+-*/^':
+                if cur:
+                    out.append(cur); cur = ''
+                out.append(ch)
+            elif ch == ' ':
+                continue
+            else:
+                raise ValueError(f'Unexpected char {ch}')
+        if cur:
+            out.append(cur)
+        return out
 
     def _add_traceback(self, step, info):
         """Add step-wise traceback for debugging."""

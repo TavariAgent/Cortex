@@ -3,6 +3,10 @@ import asyncio
 import mpmath as mp
 import sympy as sp
 
+from packing_utils import convert_and_pack
+from priority_rules import precedence_of
+from slice_mixin import SliceMixin
+
 
 class MathEngine(ABC):
     """Abstract base class for all math engines. Enables parallel computation with priority-flow helpers."""
@@ -49,13 +53,63 @@ class MathEngine(ABC):
         return self  # Or metadata
 
 
-class TrigonometryEngine(MathEngine):
+class TrigonometryEngine(SliceMixin, MathEngine):
     """Handles trig functions: sin, cos, tan, etc. Implements dunders where ops apply."""
 
     def __init__(self, segment_manager):
         super().__init__(segment_manager)
         self.traceback_info = []
         self._value = "0"
+
+    # ------------------------------------------------------------------
+    # SliceMixin requirement: how to actually evaluate *one* slice
+    # ------------------------------------------------------------------
+    def _evaluate_atom(self, slice_text: str):
+        """
+        Evaluate a slice that now contains *no parentheses*.
+        Handle ^, *, /, +, - with mpmath high precision.
+        """
+        tokens = self._linear_tokenize(slice_text)      # NEW helper below
+        # Apply operator precedence using priority_rules.py
+        for op_level in [4, 3, 2]:                      # ^  then */  then +-
+            i = 0
+            while i < len(tokens):
+                if precedence_of(tokens[i]) == op_level:
+                    left = mp.mpf(tokens[i-1]); right = mp.mpf(tokens[i+1])
+                    if tokens[i] == '^':
+                        val = mp.power(left, right)
+                    elif tokens[i] == '*':
+                        val = left * right
+                    elif tokens[i] == '/':
+                        val = left / right
+                    elif tokens[i] == '+':
+                        val = left + right
+                    else:
+                        val = left - right
+                    tokens = tokens[:i-1] + [str(val)] + tokens[i+2:]
+                else:
+                    i += 1
+        if len(tokens) != 1:
+            raise ValueError(f'Could not resolve slice: {tokens}')
+        return mp.mpf(tokens[0])
+
+    def _linear_tokenize(self, flat_expr: str):
+        """Simple left-to-right tokenizer for numbers and operators (no parens)."""
+        out, cur = [], ''
+        for ch in flat_expr:
+            if ch.isdigit() or ch == '.':
+                cur += ch
+            elif ch in '+-*/^':
+                if cur:
+                    out.append(cur); cur = ''
+                out.append(ch)
+            elif ch == ' ':
+                continue
+            else:
+                raise ValueError(f'Unexpected char {ch}')
+        if cur:
+            out.append(cur)
+        return out
 
     def _add_traceback(self, step, info):
         """Add step-wise traceback for debugging."""
@@ -113,38 +167,8 @@ class TrigonometryEngine(MathEngine):
         return final_results
 
     @staticmethod
-    def _convert_and_pack(parts):
-        """Helper method: Convert multi-part inputs to byte arrays, pre-pack for intra-engine ops, and prepare for __add__ to segment manager.
-
-        This handles conversions during expression stages, producing new values to pre-pack.
-        Engines can override for specific logic (e.g., numerical vs. symbolic).
-        Returns a pre-packed value ready for XOR sub-directory segment handling.
-        """
-        # Stub: Default conversion logic
-        byte_arrays = []
-        for part in parts:
-            if isinstance(part, int):
-                # Convert to byte string (big-endian, with liberal allocation)
-                byte_str = str(part).encode('utf-8')
-                byte_arrays.append(bytearray(byte_str))
-            elif isinstance(part, str):
-                byte_arrays.append(bytearray(part.encode('utf-8')))
-            elif isinstance(part, complex):
-                # For complex: pack real and imag separately
-                real_bytes = bytearray(str(part.real).encode('utf-8'))
-                imag_bytes = bytearray(str(part.imag).encode('utf-8'))
-                byte_arrays.extend([real_bytes, imag_bytes])
-            else:
-                # Fallback: assume bytes or convertible
-                byte_arrays.append(bytearray(str(part).encode('utf-8')))
-
-        # Pre-pack: Combine into a single bytearray (simple concatenation; engines can customize)
-        packed = bytearray()
-        for ba in byte_arrays:
-            packed.extend(ba)
-
-        # Return pre-packed value for __add__ to segment manager (via XOR sub-dir)
-        return packed
+    def _convert_and_pack(parts, *, twos_complement=False):
+        return convert_and_pack(parts, twos_complement=twos_complement)
 
     @staticmethod
     def snap_to_angle(arg):
