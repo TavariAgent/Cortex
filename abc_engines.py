@@ -7,8 +7,9 @@ from decimal import Decimal
 from sympy import sympify, nsimplify, srepr
 
 from packing_utils import convert_and_pack
+from priority_rules import precedence_of
 from segment_manager import SegmentManager
-
+from slice_mixin import SliceMixin
 
 class MathEngine(ABC):
     """Abstract base class for all math engines. Enables parallel computation with priority-flow helpers."""
@@ -90,7 +91,7 @@ class MathEngine(ABC):
         return convert_and_pack(parts, twos_complement=twos_complement)
 
 
-class BasicArithmeticEngine(MathEngine):
+class BasicArithmeticEngine(SliceMixin, MathEngine):
     """Handles basic arithmetic: sub, mul, div, pow. Uses built-in math where possible, falls back to Decimal/mpmath."""
 
     def __init__(self, segment_manager):
@@ -98,6 +99,57 @@ class BasicArithmeticEngine(MathEngine):
         self.traceback_info = []  # For step-wise debug info
         self._value = "0"  # Default value for chaining
         # _cache is inherited from MathEngine
+        mp.dps = 50
+
+    # ------------------------------------------------------------------
+    # SliceMixin requirement: how to actually evaluate *one* slice
+    # ------------------------------------------------------------------
+    def _evaluate_atom(self, slice_text: str):
+        """
+        Evaluate a slice that now contains *no parentheses*.
+        Handle ^, *, /, +, - with mpmath high precision.
+        """
+        tokens = self._linear_tokenize(slice_text)      # NEW helper below
+        # Apply operator precedence using priority_rules.py
+        for op_level in [4, 3, 2]:                      # ^  then */  then +-
+            i = 0
+            while i < len(tokens):
+                if precedence_of(tokens[i]) == op_level:
+                    left = mp.mpf(tokens[i-1]); right = mp.mpf(tokens[i+1])
+                    if tokens[i] == '^':
+                        val = mp.power(left, right)
+                    elif tokens[i] == '*':
+                        val = left * right
+                    elif tokens[i] == '/':
+                        val = left / right
+                    elif tokens[i] == '+':
+                        val = left + right
+                    else:
+                        val = left - right
+                    tokens = tokens[:i-1] + [str(val)] + tokens[i+2:]
+                else:
+                    i += 1
+        if len(tokens) != 1:
+            raise ValueError(f'Could not resolve slice: {tokens}')
+        return mp.mpf(tokens[0])
+
+    def _linear_tokenize(self, flat_expr: str):
+        """Simple left-to-right tokenizer for numbers and operators (no parens)."""
+        out, cur = [], ''
+        for ch in flat_expr:
+            if ch.isdigit() or ch == '.':
+                cur += ch
+            elif ch in '+-*/^':
+                if cur:
+                    out.append(cur); cur = ''
+                out.append(ch)
+            elif ch == ' ':
+                continue
+            else:
+                raise ValueError(f'Unexpected char {ch}')
+        if cur:
+            out.append(cur)
+        return out
 
     def _add_traceback(self, step, info):
         """Add step-wise traceback for debugging."""
@@ -118,202 +170,6 @@ class BasicArithmeticEngine(MathEngine):
         """Validate a number string has at most one decimal point."""
         if num_str.count('.') > 1:
             raise ValueError(f"Invalid number format: {num_str}")
-
-    def _tokenize(self, expr):
-        """Tokenize into slices and functions, grouping numbers/operators per slice."""
-        tokens = []
-        i = 0
-
-        while i < len(expr):
-            char = expr[i]
-
-            if char.isalpha():
-                # Function detection (same as before)
-                func_start = i
-                while i < len(expr) and expr[i].isalpha():
-                    i += 1
-                func_name = expr[func_start:i]
-
-                if i < len(expr) and expr[i] == '(':
-                    paren_count = 1
-                    arg_start = i + 1
-                    i += 1
-                    while i < len(expr) and paren_count > 0:
-                        if expr[i] == '(':
-                            paren_count += 1
-                        elif expr[i] == ')':
-                            paren_count -= 1
-                        i += 1
-                    func_token = expr[func_start:i]
-                    tokens.append(func_token)
-                else:
-                    tokens.append(func_name)
-            elif char == '(':
-                # Slice: tokenize entire nest as one token (deepest first)
-                slice_token = self._tokenize_slice(expr, i)
-                tokens.append(slice_token)  # e.g., "(3*4-5)"
-                i += len(slice_token)
-            elif char.isdigit() or char == '.' or char in '+-*/':
-                # For top-level without parens: group as a slice token
-                slice_start = i
-                while i < len(expr) and (expr[i].isdigit() or expr[i] in '+-*/.' or expr[i] == ' '):
-                    i += 1
-                slice_content = expr[slice_start:i].replace(' ', '')  # Remove spaces
-                tokens.append(f"({slice_content})")  # Wrap as slice for consistency
-            elif char == ' ':
-                i += 1
-            else:
-                raise ValueError(f"Invalid character: {char}")
-
-        # Treat the whole expression as one slice to avoid splitting on trailing operators
-        tokens = [f"({expr.replace(' ', '')})"]
-        return tokens
-
-    def _tokenize_slice(self, expr, start_idx):
-        """Tokenize a paren slice as one token, recursing for nests."""
-        paren_count = 1
-        i = start_idx + 1
-        content = ""
-
-        while i < len(expr) and paren_count > 0:
-            if expr[i] == '(':
-                # Nested slice
-                nested = self._tokenize_slice(expr, i)
-                content += nested
-                i += len(nested)
-            elif expr[i] == ')':
-                paren_count -= 1
-                if paren_count == 0:
-                    break
-            else:
-                content += expr[i]
-                i += 1
-
-        return f"({content})"
-
-    def _evaluate_tokens(self, tokens):
-        """Process tokens, evaluating slices and functions recursively."""
-        processed = []
-
-        for token in tokens:
-            if token.startswith('(') and token.endswith(')'):
-                # Slice: strip parens and compute inner arithmetic
-                inner_expr = token[1:-1]
-                if inner_expr:  # Not empty
-                    result = self._evaluate_slice(inner_expr)
-                    processed.append(str(result))
-                else:
-                    processed.append(token)
-            elif any(func in token for func in ['sin(', 'cos(', 'tan(']):
-                # Function: quick unpack
-                unpacked = self.quick_unpack_function(token)
-                processed.append(unpacked)
-            else:
-                processed.append(token)
-
-        self._add_traceback('processed_tokens', f'Processed tokens: {processed}')
-        return processed
-
-    def _evaluate_slice(self, slice_expr):
-        """Evaluate a slice's inner expression with functions, parens, and full PEMDAS including exponents."""
-        # First, handle functions by replacing with computed values
-        for func in ['sin', 'cos', 'tan', 'log', 'sqrt']:
-            func_call = f"{func}("
-            while func_call in slice_expr:
-                start = slice_expr.find(func_call)
-                paren_count = 1
-                j = start + len(func_call)
-                while j < len(slice_expr) and paren_count > 0:
-                    if slice_expr[j] == '(':
-                        paren_count += 1
-                    elif slice_expr[j] == ')':
-                        paren_count -= 1
-                    j += 1
-                if paren_count > 0:
-                    raise ValueError("Mismatched parens in function")
-                func_token = slice_expr[start:j]
-                replaced = self.quick_unpack_function(func_token)
-                slice_expr = slice_expr[:start] + replaced + slice_expr[j:]
-
-        # Replace '**' with '^' for internal power handling
-        slice_expr = slice_expr.replace('**', '^')
-
-        # Then handle parentheses recursively
-        while '(' in slice_expr:
-            start = slice_expr.find('(')
-            end = start + 1
-            count = 1
-            while end < len(slice_expr) and count > 0:
-                if slice_expr[end] == '(':
-                    count += 1
-                elif slice_expr[end] == ')':
-                    count -= 1
-                end += 1
-            if count > 0:
-                raise ValueError("Mismatched parentheses in slice")
-            sub_expr = slice_expr[start + 1:end - 1]
-            sub_result = self._evaluate_slice(sub_expr)  # Recursive call
-            slice_expr = slice_expr[:start] + str(sub_result) + slice_expr[end:]
-
-        # Now tokenize the flat expression (no parens or functions left)
-        sub_tokens = []
-        current = ""
-        for char in slice_expr:
-            if char.isdigit() or char == '.':
-                current += char
-            elif char in '+-*/^':  # Include ^ for exponents
-                if current:
-                    sub_tokens.append(current)
-                    current = ""
-                sub_tokens.append(char)
-            elif char != ' ':
-                raise ValueError(f"Invalid char in slice: {char}")
-        if current:
-            sub_tokens.append(current)
-
-        # Apply PEMDAS: first ^, then * /, then + -
-        tokens = sub_tokens[:]
-
-        # Exponents (^) first
-        i = 0
-        while i < len(tokens):
-            if i > 0 and tokens[i] == '^' and i + 1 < len(tokens):
-                left = mp.mpf(tokens[i - 1])
-                right = mp.mpf(tokens[i + 1])
-                result = mp.power(left, right)
-                tokens = tokens[:i - 1] + [str(result)] + tokens[i + 2:]
-            else:
-                i += 1
-
-        # Then multiplication and division
-        i = 0
-        while i < len(tokens):
-            if i > 0 and tokens[i] in ['*', '/'] and i + 1 < len(tokens):
-                left = mp.mpf(tokens[i - 1])
-                right = mp.mpf(tokens[i + 1])
-                op = tokens[i]
-                result = left * right if op == '*' else left / right
-                tokens = tokens[:i - 1] + [str(result)] + tokens[i + 2:]
-            else:
-                i += 1
-
-        # Then addition and subtraction
-        i = 0
-        while i < len(tokens):
-            if i > 0 and tokens[i] in ['+', '-'] and i + 1 < len(tokens):
-                left = mp.mpf(tokens[i - 1])
-                right = mp.mpf(tokens[i + 1])
-                op = tokens[i]
-                result = left + right if op == '+' else left - right
-                tokens = tokens[:i - 1] + [str(result)] + tokens[i + 2:]
-            else:
-                i += 1
-
-        if len(tokens) != 1:
-            raise ValueError(f"Slice evaluation failed: {tokens}")
-
-        result = mp.mpf(tokens[0])
-        return result
 
     def call_helper(self, expr):
         """Dynamic helper: Route mixed expressions to appropriate engines and send results to segment_pools."""
@@ -341,62 +197,6 @@ class BasicArithmeticEngine(MathEngine):
         part_order = [{'part': 'mixed_result', 'value': str(result), 'bytes': mixed_packed}]
         self.segment_manager.receive_part_order('CallHelper', f'mixed_{expr}', part_order)
 
-        return result
-
-    def quick_unpack_function(self, func_token):
-        """Unpack and compute function calls (e.g., sin(pi/6)) using mpmath/SymPy.
-
-        Delegates trig to TrigonometryEngine for symbolic args.
-        """
-        self._add_traceback('unpack_start', f'Unpacking: {func_token}')
-
-        if func_token.startswith('sin(') and func_token.endswith(')'):
-            arg_str = func_token[4:-1]
-            from trigonometry_engine import TrigonometryEngine
-            trig_engine = TrigonometryEngine(self.segment_manager)
-            result = trig_engine.sin(arg_str)  # Handles symbolic via compute logic
-        elif func_token.startswith('cos(') and func_token.endswith(')'):
-            arg_str = func_token[4:-1]
-            from trigonometry_engine import TrigonometryEngine
-            trig_engine = TrigonometryEngine(self.segment_manager)
-            result = trig_engine.cos(arg_str)
-        elif func_token.startswith('tan(') and func_token.endswith(')'):
-            arg_str = func_token[4:-1]
-            from trigonometry_engine import TrigonometryEngine
-            trig_engine = TrigonometryEngine(self.segment_manager)
-            result = trig_engine.tan(arg_str)
-        else:
-            raise ValueError(f"Unsupported function: {func_token}")
-
-        self._add_traceback('unpacked', f'Unpacked {func_token} to {result}')
-        return str(result)
-
-    def _process_parentheses(self, tokens):
-        """Recursively process parentheses to isolate nests."""
-        result = []
-        i = 0
-        while i < len(tokens):
-            if tokens[i] == '(':
-                paren_count = 1
-                j = i + 1
-                while j < len(tokens) and paren_count > 0:
-                    if tokens[j] == '(':
-                        paren_count += 1
-                    elif tokens[j] == ')':
-                        paren_count -= 1
-                    j += 1
-                if paren_count > 0:
-                    raise ValueError("Mismatched parentheses")
-                # Recursively process the subexpression
-                subexpr = tokens[i + 1:j - 1]
-                processed_sub = self._process_parentheses(subexpr)
-                result.append(f"({','.join(processed_sub)})")  # Mark as processed nest
-                i = j
-            elif tokens[i] == ')':
-                raise ValueError("Mismatched parentheses")
-            else:
-                result.append(tokens[i])
-                i += 1
         return result
 
     @staticmethod
@@ -430,14 +230,14 @@ class BasicArithmeticEngine(MathEngine):
         return all(node.is_Atom or node.is_Pow or node.is_Add or node.is_Mul
                    for node in tree.args + (tree,))
 
-    def compute(self, expr):
+    def compute(self, expr: str):
         """Parse and compute arithmetic expressions with full PEMDAS support.
 
         Supports: +, -, *, / with proper order of operations.
         Uses mpmath for high precision computation, avoiding floats and Decimals as per guidelines.
         Integrates with parallel flow and segment manager.
         """
-        self._add_traceback('compute_start', f'Expression: {expr}')
+        self._add_traceback('compute_start', expr)
 
         # Parse the expression
         expr = expr.strip()
@@ -449,22 +249,16 @@ class BasicArithmeticEngine(MathEngine):
             self.segment_manager.receive_packed_segment(self.__class__.__name__, packed)
             return str(sym_res)
 
-        # Tokenize the expression
-        tokens = self._tokenize(expr)
-        self._add_traceback('tokenize', f'Tokens: {tokens}')
-
         # Evaluate with PEMDAS
-        result = self._evaluate_tokens(tokens)
-        processed = self._evaluate_tokens(tokens)
-        self._add_traceback('computation', f'Final result: {processed}')
-
-        # Strip list if single result
-        final_result = processed[0] if isinstance(processed, list) and len(processed) == 1 else processed
+        result = self._compute_slice_parallel(expr)
+        packed = self._convert_and_pack([result])
+        self._cache.append(packed)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed)
 
         # Pack result as bytes and accumulate in cache
         packed_bytes = str(result).encode('utf-8')
         self._cache.append(packed_bytes)
-        
+
         # Send packed bytes to segment manager
         self.segment_manager.receive_packed_segment(
             self.__class__.__name__,
@@ -478,8 +272,7 @@ class BasicArithmeticEngine(MathEngine):
             f'compute_{expr.replace(" ", "")}',
             part_order
         )
-
-        return str(final_result)
+        return str(result)
 
     def __add__(self, other):
         """Overload __add__: Send part orders to segment manager per-slice."""

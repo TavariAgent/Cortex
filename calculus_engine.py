@@ -129,6 +129,36 @@ class CalculusEngine(MathEngine):
             return result
 
         # ------------------------------------------------------------------
+        # 1️⃣ Fast path ─── the whole expression *is* an Integral
+        # ------------------------------------------------------------------
+        if isinstance(expr, sp.Integral):
+            result = expr.doit()
+            self._add_traceback(
+                'compute_integral_direct',
+                f'{expr} -> {result}'
+            )
+            packed_bytes = str(result).encode('utf-8')
+            self._cache.append(packed_bytes)
+            self.segment_manager.receive_packed_segment(self.__class__.__name__,
+                                                        packed_bytes)
+            return result
+
+        # ------------------------------------------------------------------
+        # 1️⃣ Fast path ─── the whole expression *is* a Limit
+        # ------------------------------------------------------------------
+        if isinstance(expr, sp.Limit):
+            result = expr.doit()
+            self._add_traceback(
+                'compute_limit_direct',
+                f'{expr} -> {result}'
+            )
+            packed_bytes = str(result).encode('utf-8')
+            self._cache.append(packed_bytes)
+            self.segment_manager.receive_packed_segment(self.__class__.__name__,
+                                                        packed_bytes)
+            return result
+
+        # ------------------------------------------------------------------
         # 2️⃣ Mixed expression that *contains* derivatives
         # ------------------------------------------------------------------
         if expr.has(sp.Derivative):
@@ -137,6 +167,20 @@ class CalculusEngine(MathEngine):
             self._add_traceback(
                 'compute_inner_derivatives',
                 f'Inner derivatives evaluated -> {expr}'
+            )
+        if expr.has(sp.Integral):
+            # Evaluate only the inner Integral nodes, keep outer structure.
+            expr = expr.doit(deep=False)
+            self._add_traceback(
+                'compute_inner_integrals',
+                f'Inner integrals evaluated -> {expr}'
+            )
+        if expr.has(sp.Limit):
+            # Evaluate only the inner Limit nodes, keep outer structure.
+            expr = expr.doit(deep=False)
+            self._add_traceback(
+                'compute_inner_limits',
+                f'Inner limits evaluated -> {expr}'
             )
         if expr.is_Symbol:
             self._value = str(expr)
