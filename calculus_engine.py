@@ -18,7 +18,8 @@ class MathEngine(ABC):
         """Parallel compute method: Calculate all available parts simultaneously, respecting primary level."""
         pass
 
-    def _set_part_order(self, parts, apply_at_start=True, apply_after_return=False):
+    @staticmethod
+    def _set_part_order(parts, apply_at_start=True, apply_after_return=False):
         """Helper: Set part order via priority + left-to-right association. Flows around PEMDAS by respecting priorities within parts.
 
         - Priority mapping: ^ (highest), * /, + - (lowest). Sums/limits prioritize slice-level.

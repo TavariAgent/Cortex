@@ -17,7 +17,62 @@ class MathEngine(ABC):
         """Parallel compute method: Calculate all available parts simultaneously, respecting primary level."""
         pass
 
-    def _set_part_order(self, parts, apply_at_start=True, apply_after_return=False):
+    async def _compute_single_part(self, part):
+        """Stub: Compute single part, respecting priorities."""
+        if 'nest' in str(part):
+            return f"nested_{part}"
+        return part * 2
+
+    # Stub dunder methods for math ops (except __add__ which is handled by segment_manager)
+    @abstractmethod
+    def __sub__(self, other):
+        pass
+
+    @abstractmethod
+    def __mul__(self, other):
+        pass
+
+    @abstractmethod
+    def __div__(self, other):
+        pass
+
+    @abstractmethod
+    def __pow__(self, other):
+        pass
+
+    def __add__(self, other):
+        """Overload __add__: Send part orders to segment manager per-slice."""
+        # Stub: Generate part orders based on engine logic
+        part_order = [{'part': 'example', 'bytes': b'data'}]  # Mock
+        slice_data = 'slice_1'  # From expression parsing
+        self.segment_manager.receive_part_order(self.__class__.__name__, slice_data, part_order)
+        return self  # Or metadata
+
+
+class TrigonometryEngine(MathEngine):
+    """Handles trig functions: sin, cos, tan, etc. Implements dunders where ops apply."""
+
+    def __init__(self, segment_manager):
+        super().__init__(segment_manager)
+        self.traceback_info = []
+        self._value = "0"
+
+    def _add_traceback(self, step, info):
+        """Add step-wise traceback for debugging."""
+        try:
+            loop = asyncio.get_running_loop()
+            timestamp = loop.time()
+        except RuntimeError:
+            timestamp = 0
+
+        self.traceback_info.append({
+            'step': step,
+            'info': info,
+            'timestamp': timestamp
+        })
+
+    @staticmethod
+    def _set_part_order(parts, apply_at_start=True, apply_after_return=False):
         """Helper: Set part order via priority + left-to-right association. Flows around PEMDAS by respecting priorities within parts.
 
         - Priority mapping: ^ (highest), * /, + - (lowest). Sums/limits prioritize slice-level.
@@ -57,38 +112,8 @@ class MathEngine(ABC):
             )
         return final_results
 
-    async def _compute_single_part(self, part):
-        """Stub: Compute single part, respecting priorities."""
-        if 'nest' in str(part):
-            return f"nested_{part}"
-        return part * 2
-
-    # Stub dunder methods for math ops (except __add__ which is handled by segment_manager)
-    @abstractmethod
-    def __sub__(self, other):
-        pass
-
-    @abstractmethod
-    def __mul__(self, other):
-        pass
-
-    @abstractmethod
-    def __div__(self, other):
-        pass
-
-    @abstractmethod
-    def __pow__(self, other):
-        pass
-
-    def __add__(self, other):
-        """Overload __add__: Send part orders to segment manager per-slice."""
-        # Stub: Generate part orders based on engine logic
-        part_order = [{'part': 'example', 'bytes': b'data'}]  # Mock
-        slice_data = 'slice_1'  # From expression parsing
-        self.segment_manager.receive_part_order(self.__class__.__name__, slice_data, part_order)
-        return self  # Or metadata
-
-    def _convert_and_pack(self, parts):
+    @staticmethod
+    def _convert_and_pack(parts):
         """Helper method: Convert multi-part inputs to byte arrays, pre-pack for intra-engine ops, and prepare for __add__ to segment manager.
 
         This handles conversions during expression stages, producing new values to pre-pack.
@@ -120,29 +145,6 @@ class MathEngine(ABC):
 
         # Return pre-packed value for __add__ to segment manager (via XOR sub-dir)
         return packed
-
-
-class TrigonometryEngine(MathEngine):
-    """Handles trig functions: sin, cos, tan, etc. Implements dunders where ops apply."""
-
-    def __init__(self, segment_manager):
-        super().__init__(segment_manager)
-        self.traceback_info = []
-        self._value = "0"
-
-    def _add_traceback(self, step, info):
-        """Add step-wise traceback for debugging."""
-        try:
-            loop = asyncio.get_running_loop()
-            timestamp = loop.time()
-        except RuntimeError:
-            timestamp = 0
-
-        self.traceback_info.append({
-            'step': step,
-            'info': info,
-            'timestamp': timestamp
-        })
 
     @staticmethod
     def snap_to_angle(arg):
@@ -236,43 +238,3 @@ class TrigonometryEngine(MathEngine):
         self._cache.append(packed_bytes)
         self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
         return result
-
-    def call_helper(self, expr):
-        """Dynamic helper: Route mixed expressions to appropriate engines and send results to segment_pools."""
-        # Determine engine based on keywords
-        if 'sin' in expr or 'cos' in expr or 'tan' in expr:
-            engine = TrigonometryEngine(self.segment_manager)
-        elif 'derivative' in expr or 'integral' in expr:
-            from calculus_engine import CalculusEngine
-            engine = CalculusEngine(self.segment_manager)
-        elif 'j' in expr or ('+' in expr and 'j' in expr):
-            from complex_algebra_engine import ComplexAlgebraEngine
-            engine = ComplexAlgebraEngine(self.segment_manager)
-        else:
-            # Default to basic arithmetic for numeric/symbolic mixes
-            from abc_engines import BasicArithmeticEngine
-            engine = BasicArithmeticEngine(self.segment_manager)
-
-        # Compute result
-        result = engine.compute(expr)
-
-        # Pack as mixed result (e.g., 'mixed:result') and send to segment_pools
-        mixed_packed = f"mixed:{result}".encode('utf-8')
-        self.segment_manager.receive_packed_segment('CallHelper', mixed_packed)
-
-        # Optional: Send part_order for deeper control
-        part_order = [{'part': 'mixed_result', 'value': str(result), 'bytes': mixed_packed}]
-        self.segment_manager.receive_part_order('CallHelper', f'mixed_{expr}', part_order)
-
-        return result
-
-    def _convert_and_pack(self, parts):
-        """Override: Handle angle/radian conversions for trig."""
-        packed = super()._convert_and_pack(parts)
-        # Additional: Pre-pack trig-specific (e.g., convert to radians)
-        for part in parts:
-            if 'deg' in str(part):  # Assume degrees marker
-                rad = mp.radians(mp.mpf(str(part).replace('deg', '')))
-                packed.extend(bytearray(str(rad).encode('utf-8')))
-        return packed
-

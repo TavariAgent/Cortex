@@ -22,7 +22,8 @@ class MathEngine(ABC):
         """Parallel compute method: Calculate all available parts simultaneously, respecting primary level."""
         pass
 
-    def _set_part_order(self, parts, apply_at_start=True, apply_after_return=False):
+    @staticmethod
+    def _set_part_order(parts, apply_at_start=True, apply_after_return=False):
         """Helper: Set part order via priority + left-to-right association. Flows around PEMDAS by respecting priorities within parts.
 
         - Priority mapping: ^ (highest), * /, + - (lowest). Sums/limits prioritize slice-level.
@@ -357,8 +358,6 @@ class BasicArithmeticEngine(MathEngine):
             from complex_algebra_engine import ComplexAlgebraEngine
             engine = ComplexAlgebraEngine(self.segment_manager)
         else:
-            # Default to basic arithmetic for numeric/symbolic mixes
-            from abc_engines import BasicArithmeticEngine
             engine = BasicArithmeticEngine(self.segment_manager)
 
         # Compute result
@@ -375,38 +374,31 @@ class BasicArithmeticEngine(MathEngine):
         return result
 
     def quick_unpack_function(self, func_token):
-        """Quick-unpack function: Calculate inner numerics, fold result.
+        """Unpack and compute function calls (e.g., sin(pi/6)) using mpmath/SymPy.
 
-        E.g., 'sin(3+4)' -> compute inner '3+4' = 7, then sin(7).
-        Uses mpmath for precision, delegates to engines if complex.
-        Returns folded string result.
+        Delegates trig to TrigonometryEngine for symbolic args.
         """
-        # Parse function name and argument
-        if '(' not in func_token or ')' not in func_token:
-            raise ValueError(f"Invalid function token: {func_token}")
+        self._add_traceback('unpack_start', f'Unpacking: {func_token}')
 
-        func_name = func_token.split('(')[0]
-        inner_expr = func_token.split('(')[1].rstrip(')')
-
-        # Compute inner expression (simple for now; delegate to compute if nested)
-        if '+' in inner_expr or '-' in inner_expr or '*' in inner_expr or '/' in inner_expr:
-            # Use basic compute for inner arithmetic
-            inner_result = self.compute(inner_expr)
+        if func_token.startswith('sin(') and func_token.endswith(')'):
+            arg_str = func_token[4:-1]
+            from trigonometry_engine import TrigonometryEngine
+            trig_engine = TrigonometryEngine(self.segment_manager)
+            result = trig_engine.sin(arg_str)  # Handles symbolic via compute logic
+        elif func_token.startswith('cos(') and func_token.endswith(')'):
+            arg_str = func_token[4:-1]
+            from trigonometry_engine import TrigonometryEngine
+            trig_engine = TrigonometryEngine(self.segment_manager)
+            result = trig_engine.cos(arg_str)
+        elif func_token.startswith('tan(') and func_token.endswith(')'):
+            arg_str = func_token[4:-1]
+            from trigonometry_engine import TrigonometryEngine
+            trig_engine = TrigonometryEngine(self.segment_manager)
+            result = trig_engine.tan(arg_str)
         else:
-            inner_result = inner_expr
+            raise ValueError(f"Unsupported function: {func_token}")
 
-        # Apply function using mpmath
-        arg = mp.mpf(inner_result)
-        if func_name == 'sin':
-            result = mp.sin(arg)
-        elif func_name == 'cos':
-            result = mp.cos(arg)
-        elif func_name == 'tan':
-            result = mp.tan(arg)
-        else:
-            raise ValueError(f"Unsupported function: {func_name}")
-
-        self._add_traceback('function_unpack', f'{func_token} -> {func_name}({inner_result}) = {result}')
+        self._add_traceback('unpacked', f'Unpacked {func_token} to {result}')
         return str(result)
 
     def _process_parentheses(self, tokens):

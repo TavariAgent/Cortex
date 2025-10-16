@@ -2,6 +2,7 @@ import asyncio
 from collections import defaultdict
 
 from abc_engines import BasicArithmeticEngine
+from trigonometry_engine import TrigonometryEngine
 
 
 class StageTracer:
@@ -191,7 +192,7 @@ class Compute:
         while not self.compiler.flag_pool.get('engines_done', False):
             await asyncio.sleep(0.1)
         # Trigger full expression to __str__ again
-        formalized = str(self.compiler)  # Formalize pools into static object
+        formalized = str(self.compiler)  # Formalize pools into object
         # Compile segments into result
         compiled = self._compile_expression()
         return compiled
@@ -229,3 +230,4 @@ if __name__ == '__main__':
 
     # Add engines to manager
     manager.add_engine('basic', BasicArithmeticEngine)
+    manager.add_engine('trig', TrigonometryEngine)
