@@ -100,6 +100,5 @@ def test_deep_expressions():
 
     return all_success
 
-
 if __name__ == '__main__':
     test_deep_expressions()

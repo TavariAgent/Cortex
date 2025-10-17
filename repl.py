@@ -4,7 +4,7 @@ Interactive REPL for Cortex Calculator.
 Allows real-time testing of expressions across engines (arithmetic, trig, calculus, complex).
 Type expressions like '2+3', 'sin(pi)', or 'derivative(x**2, x)'. Type 'quit' to exit.
 """
-
+import asyncio
 import sys
 import os
 
@@ -12,6 +12,7 @@ from calculus_engine import CalculusEngine
 from complex_algebra_engine import ComplexAlgebraEngine
 from precision_manager import presets, get_dps, set_dps
 from trigonometry_engine import TrigonometryEngine
+from part_inspector import compute as inspect_compute
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -74,7 +75,7 @@ def main():
                 continue
 
             # Compute expression via call_helper (routes to appropriate engine)
-            result = engine.call_helper(user_input)
+            result = asyncio.run(inspect_compute(user_input))
             print(f"Result: {result}")
 
             if show_trace:

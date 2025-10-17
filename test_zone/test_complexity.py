@@ -1,70 +1,83 @@
-#!/usr/bin/env python3
 """
-Test script for cross-engine complexity: Mixed expressions via call_helper.
-Tests routing, computation, and segment_pools for systematic control.
+Simple cross-engine complexity smoke–tests for Cortex.
+
+To run:
+    $ python -m unittest test_complexity.py
+(or “pytest” will also detect them).
+
+The tests instantiate *one* SegmentManager/Structure pair and go
+through BasicArithmeticEngine.call_helper(), which routes every
+expression to the appropriate specialised engine (trig / calculus /
+complex).  We compare the returned string with a high-precision mpmath /
+SymPy evaluation.
+
+If any assertion fails you will see which engine / expression broke.
 """
 
-import sys
-import os
+import unittest
+import math
+from mpmath import mp
+import sympy as sp
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from abc_engines import BasicArithmeticEngine
+# Cortex imports – adjust relative path if you vendored differently.
 from segment_manager import SegmentManager
 from main import Structure
+from abc_engines import BasicArithmeticEngine
 
 
-def test_complexity():
-    """Test call_helper with expressions across engines."""
-    print("=" * 80)
-    print("Testing Cross-Engine Complexity via call_helper")
-    print("=" * 80)
-
-    struct = Structure()
-    segment_mgr = SegmentManager(struct)
-    engine = BasicArithmeticEngine(segment_mgr)  # Base engine for call_helper
-
-    tests = [
-        ("cos(pi)", "-1.0", "Trigonometry"),
-        ("derivative(x**2, x)", "2*x", "Calculus"),
-        ("integral(2*x, x)", "x**2", "Calculus"),
-        ("1+2j", "(1.0 + 2.0j)", "Complex"),
-        ("2+3", "5.0", "Arithmetic"),
-        ("((2**3)-5)+1", "4.0", "Arithmetic with powers"),
-    ]
-
-    all_success = True
-    for expr, expected, category in tests:
-        print(f"\nTesting {category}: {expr}")
-        print("-" * 40)
-        try:
-            result = engine.call_helper(expr)
-            success = abs(float(result) - float(expected)) < 1e-5 if expected.replace('.', '').isdigit() else str(
-                result) == expected
-            print(f"Result: {result}")
-            print(f"Expected: {expected}")
-            print(f"Success: {success}")
-            if not success:
-                all_success = False
-        except Exception as e:
-            print(f"Error: {e}")
-            all_success = False
-
-    # Check segment_pools for mixed results
-    print(f"\nSegment pools after tests: {list(segment_mgr.segment_pools.keys())}")
-    if 'CallHelper' in segment_mgr.segment_pools:
-        print(f"Mixed segments: {len(segment_mgr.segment_pools['CallHelper'])}")
-
-    print("\n" + "=" * 80)
-    if all_success:
-        print("Cross-engine complexity tests PASSED!")
-    else:
-        print("Some tests FAILED - check routing or computations.")
-    print("=" * 80)
-
-    return all_success
+mp.dps = 50  # generous precision for the numeric comparisons
 
 
-if __name__ == '__main__':
-    test_complexity()
+class CrossEngineComplexityTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        struct = Structure()
+        cls.seg_mgr = SegmentManager(struct)
+        cls.engine  = BasicArithmeticEngine(cls.seg_mgr)
+
+    # helper: compare numeric strings with 1 ulp tolerance at current dps
+    def _assertAlmostEqualMP(self, result_str, expected):
+        res = mp.mpf(result_str)
+        exp = mp.mpf(str(expected))
+        self.assertAlmostEqual(res, exp, delta=mp.mpf(10) ** (-mp.dps + 2))
+
+    # 1.  trig-only, repeated value, mixed “+”
+    def test_double_sin(self):
+        expr     = "sin(pi/6) + sin(pi/6)"
+        expected = mp.sin(mp.pi/6) + mp.sin(mp.pi/6)   # exactly 1
+        res_str  = self.engine.call_helper(expr)
+        self._assertAlmostEqualMP(res_str, expected)
+
+    # 2.  trig * calculus mix
+    def test_trig_times_derivative(self):
+        expr = "cos(pi/3)*2 + derivative(x**2, x).subs(x, 3)"
+        # cos 60° = 0.5; derivative 2x at 3 = 6
+        expected = mp.cos(mp.pi/3) * 2 + 6
+        res_str  = self.engine.call_helper(expr)
+        self._assertAlmostEqualMP(res_str, expected)
+
+    # 3.  pure complex algebra via ComplexAlgebraEngine
+    def test_complex_product(self):
+        expr     = "(1+2j)*(3+4j)"
+        expected = complex(1+2j) * complex(3+4j)   # ⇒ (-5+10j)
+        res_str  = self.engine.call_helper(expr)
+        # Basic string equality works for Python complex repr
+        self.assertEqual(res_str.replace(' ', ''), str(expected))
+
+    # 4.  everything at once: trig + calc + complex addition
+    def test_grand_mix(self):
+        expr = "sin(pi/4) + derivative(x**3, x).subs(x, 2) + (1+0j)"
+        expected = (
+            mp.sin(mp.pi/4) +
+            3 * (2**2) +        # derivative 3x^2 at x=2
+            (1+0j)
+        )
+        res_str = self.engine.call_helper(expr)
+        # Split possible complex result “a+bj”
+        real_part, imag_part = map(str.strip, res_str.replace('j','').split('+'))
+        self._assertAlmostEqualMP(real_part, expected.real)
+        self._assertAlmostEqualMP(imag_part, expected.imag)
+
+
+if __name__ == "__main__":
+    unittest.main()

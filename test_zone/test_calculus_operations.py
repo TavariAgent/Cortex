@@ -38,7 +38,6 @@ def test_calculus_operations():
     success_deriv = str(result_deriv) == expected_deriv
     print(f"derivative(x**2, x): {result_deriv} (Expected: {expected_deriv}) - Success: {success_deriv}")
 
-
     # 2) Second derivative
     res = engine.second_derivative('x**3', 'x')
     ok = sp.simplify(res - 6*sp.symbols('x')) == 0

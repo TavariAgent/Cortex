@@ -1,5 +1,9 @@
+from mpmath import mp
+
 from slice_detector import build_slice_graph
 from priority_rules import precedence_of
+from utils.trace_helpers import add_traceback
+
 
 class SliceMixin:
     """
@@ -8,6 +12,99 @@ class SliceMixin:
         • _evaluate_atom(slice_text)   -> result (mp.mpf, SymPy, etc.)
         • _add_traceback(...)
     """
+
+    # -------------------------------------------------------------- #
+    # Trace helper
+    # -------------------------------------------------------------- #
+    def _add_traceback(self, step: str, info: str):
+        add_traceback(self, step, info)
+
+    # ──────────────────────────────────────────────────────────────
+    #  Generic part-ordering helper (PEMDAS, left-to-right)
+    # ──────────────────────────────────────────────────────────────
+    @staticmethod
+    def _set_part_order(parts, *, apply_at_start=True, apply_after_return=False):
+        """
+        Sort *parts* by operator-precedence (highest → lowest) and
+        stable left-to-right within the same precedence tier.
+
+        Parameters
+        ----------
+        parts : Iterable[Any]
+            Anything that carries either an attribute ``.op`` **or**
+            embeds the operator symbol in its ``str(part)``.
+        apply_at_start / apply_after_return : bool
+            Use the same helper before computation, after computation,
+            or both – mirrors the original API so engines don’t break.
+        """
+
+        # Fast exit – keep order if no sort requested
+        if not (apply_at_start or apply_after_return):
+            return list(parts)
+
+        def _precedence(part):
+            """Return integer precedence; larger means tighter binding."""
+            # 1) explicit attr  .op  set by engine
+            op = getattr(part, 'op', None)
+            # 2) best-effort scan in the textual representation
+            if op is None:
+                for sym in ('^', '*', '/', '+', '-'):
+                    if sym in str(part):
+                        op = sym
+                        break
+            return precedence_of(op) if op is not None else 0
+
+        # Enumerate to preserve original position as a stable tiebreaker
+        enumerated = list(enumerate(parts))
+        enumerated.sort(key=lambda kv: (-_precedence(kv[1]), kv[0]))
+        return [part for _, part in enumerated]
+
+    @staticmethod
+    def _linear_tokenize(flat_expr: str):
+        """Simple left-to-right tokenizer for numbers and operators (no parens)."""
+        out, cur = [], ''
+        for ch in flat_expr:
+            if ch.isdigit() or ch == '.':
+                cur += ch
+            elif ch in '+-*/^':
+                if cur:
+                    out.append(cur); cur = ''
+                out.append(ch)
+            elif ch == ' ':
+                continue
+            elif ch == ',':
+                # Comma separates function arguments; we ignore it for
+                # pure arithmetic tokenising.
+                continue
+            else:
+                raise ValueError(f'Unexpected char {ch}')
+        if cur:
+            out.append(cur)
+        return out
+
+    # -------------------------------------------------------------- #
+    # SliceMixin atom evaluator (needed but rarely used here)
+    # -------------------------------------------------------------- #
+    def _evaluate_atom(self, slice_text: str):
+        # Defer to BasicArithmeticEngine style evaluation if someone
+        # sends an arithmetic slice to us.
+        tokens = self._linear_tokenize(slice_text)
+        for op_level in [4, 3, 2]:
+            i = 0
+            while i < len(tokens):
+                if precedence_of(tokens[i]) == op_level:
+                    a = mp.mpf(tokens[i - 1]); b = mp.mpf(tokens[i + 1])
+                    val = (mp.power if tokens[i] == '^'
+                           else a.__mul__ if tokens[i] == '*'
+                           else a.__truediv__ if tokens[i] == '/'
+                           else a.__add__ if tokens[i] == '+'
+                           else a.__sub__)(b)
+                    tokens = tokens[:i - 1] + [str(val)] + tokens[i + 2:]
+                else:
+                    i += 1
+        if len(tokens) != 1:
+            raise ValueError(f'Could not resolve slice {tokens}')
+        return mp.mpf(tokens[0])
 
     def _compute_slice_parallel(self, expr: str):
         graph = build_slice_graph(expr)

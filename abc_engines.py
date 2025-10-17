@@ -11,7 +11,6 @@ from utils.trace_helpers import add_traceback
 from packing_utils import convert_and_pack
 from precision_manager import get_dps
 from priority_rules import precedence_of
-from segment_manager import SegmentManager
 from slice_mixin import SliceMixin
 
 mp.dps = get_dps()
@@ -24,53 +23,6 @@ class MathEngine(ABC):
         self.parallel_tasks = []
         self._cache = []  # Cache for packed bytes before sending to segment_manager
         # Set high precision
-
-    @staticmethod
-    def _set_part_order(parts, apply_at_start=True, apply_after_return=False):
-        """Helper: Set part order via priority + left-to-right association. Flows around PEMDAS by respecting priorities within parts.
-
-        - Priority mapping: ^ (highest), * /, + - (lowest). Sums/limits prioritize slice-level.
-        - Applies at start (before computation) and/or after return (post-result).
-        - Returns ordered list for dunder method requests.
-        """
-        priority_map = {
-            '^': 4,  # Exponentiation highest
-            '*': 3, '/': 3,  # Mul/div mid
-            '+': 2, '-': 2,  # Add/sub lowest
-            'sum': 1, 'limit': 1, 'other': 0  # Sums/limits lower, slice-focused
-        }
-
-        def get_priority(part):
-            # Extract op from part (stub: assume part is dict or string with op)
-            op = getattr(part, 'op', str(part).split()[0] if ' ' in str(part) else 'other')
-            return priority_map.get(op, 0)
-
-        if apply_at_start or apply_after_return:
-            # Sort by priority desc, then left-to-right (by original index as tiebreaker)
-            ordered = sorted(enumerate(parts), key=lambda x: (-get_priority(x[1]), x[0]))
-            return [part for _, part in ordered]
-        return parts  # No change if not applying
-
-    async def _compute_parts_parallel(self, parts):
-        """Helper: Compute all parts in parallel, using _set_part_order at start."""
-        ordered_parts = self._set_part_order(parts, apply_at_start=True)
-        tasks = [self._compute_single_part(part) for part in ordered_parts]
-        results = await asyncio.gather(*tasks)
-        # Apply again after return if needed
-        final_results = self._set_part_order(results, apply_after_return=True)
-        for i, result in enumerate(final_results):
-            self.segment_manager.receive_part_order(
-                self.__class__.__name__,
-                f'part_{i}',
-                [{'part': f'part_{i}', 'result': result}]
-            )
-        return final_results
-
-    async def _compute_single_part(self, part):
-        """Stub: Compute single part, respecting priorities."""
-        if 'nest' in str(part):
-            return f"nested_{part}"
-        return part * 2
 
     # Stub dunder methods for math ops (except __add__ which is handled by segment_manager)
     @abstractmethod
@@ -112,109 +64,33 @@ class BasicArithmeticEngine(SliceMixin, MathEngine):
     def _add_traceback(self, step, info):
         add_traceback(self, step, info)
 
-    # ------------------------------------------------------------------
-    # SliceMixin requirement: how to actually evaluate *one* slice
-    # ------------------------------------------------------------------
-    def _evaluate_atom(self, slice_text: str):
-        """
-        Evaluate a slice that now contains *no parentheses*.
-        Handle ^, *, /, +, - with mpmath high precision.
-        """
-        tokens = self._linear_tokenize(slice_text)      # NEW helper below
-        # Apply operator precedence using priority_rules.py
-        for op_level in [4, 3, 2]:                      # ^  then */  then +-
-            i = 0
-            while i < len(tokens):
-                if precedence_of(tokens[i]) == op_level:
-                    left = mp.mpf(tokens[i-1]); right = mp.mpf(tokens[i+1])
-                    if tokens[i] == '^':
-                        val = mp.power(left, right)
-                    elif tokens[i] == '*':
-                        val = left * right
-                    elif tokens[i] == '/':
-                        val = left / right
-                    elif tokens[i] == '+':
-                        val = left + right
-                    else:
-                        val = left - right
-                    tokens = tokens[:i-1] + [str(val)] + tokens[i+2:]
-                else:
-                    i += 1
-        if len(tokens) != 1:
-            raise ValueError(f'Could not resolve slice: {tokens}')
-        return mp.mpf(tokens[0])
+    @staticmethod
+    async def _compute_single_part(part):
+        """Stub: Compute single part, respecting priorities."""
+        if 'nest' in str(part):
+            return f"nested_{part}"
+        return part * 2
 
-    def _linear_tokenize(self, flat_expr: str):
-        """Simple left-to-right tokenizer for numbers and operators (no parens)."""
-        out, cur = [], ''
-        for ch in flat_expr:
-            if ch.isdigit() or ch == '.':
-                cur += ch
-            elif ch in '+-*/^':
-                if cur:
-                    out.append(cur); cur = ''
-                out.append(ch)
-            elif ch == ' ':
-                continue
-            else:
-                raise ValueError(f'Unexpected char {ch}')
-        if cur:
-            out.append(cur)
-        return out
+    async def _compute_parts_parallel(self, parts):
+        """Helper: Compute all parts in parallel, using _set_part_order at start."""
+        ordered_parts = self._set_part_order(parts, apply_at_start=True)
+        tasks = [self._compute_single_part(part) for part in ordered_parts]
+        results = await asyncio.gather(*tasks)
+        # Apply again after return if needed
+        final_results = self._set_part_order(results, apply_after_return=True)
+        for i, result in enumerate(final_results):
+            self.segment_manager.receive_part_order(
+                self.__class__.__name__,
+                f'part_{i}',
+                [{'part': f'part_{i}', 'result': result}]
+            )
+        return final_results
 
     @staticmethod
     def _validate_number(num_str):
         """Validate a number string has at most one decimal point."""
         if num_str.count('.') > 1:
             raise ValueError(f"Invalid number format: {num_str}")
-
-    def call_helper(self, expr):
-        """Dynamic helper: Route mixed expressions to appropriate engines and send results to segment_pools."""
-        # Determine engine based on keywords
-        if 'sin' in expr or 'cos' in expr or 'tan' in expr:
-            from trigonometry_engine import TrigonometryEngine
-            engine = TrigonometryEngine(self.segment_manager)
-        elif 'derivative' in expr or 'integral' in expr:
-            from calculus_engine import CalculusEngine
-            engine = CalculusEngine(self.segment_manager)
-        elif 'j' in expr or ('+' in expr and 'j' in expr):
-            from complex_algebra_engine import ComplexAlgebraEngine
-            engine = ComplexAlgebraEngine(self.segment_manager)
-        else:
-            engine = BasicArithmeticEngine(self.segment_manager)
-
-        # Compute result
-        result = engine.compute(expr)
-
-        # Pack as mixed result (e.g., 'mixed:result') and send to segment_pools
-        mixed_packed = f"mixed:{result}".encode('utf-8')
-        self.segment_manager.receive_packed_segment('CallHelper', mixed_packed)
-
-        # Optional: Send part_order for deeper control
-        part_order = [{'part': 'mixed_result', 'value': str(result), 'bytes': mixed_packed}]
-        self.segment_manager.receive_part_order('CallHelper', f'mixed_{expr}', part_order)
-
-        return result
-
-    @staticmethod
-    def _detect_functions(tokens):
-        """Detect and mark functions in tokens."""
-        result = []
-        i = 0
-        while i < len(tokens):
-            if tokens[i] in ['sin', 'cos', 'tan', 'log', 'sqrt']:  # Add more as needed
-                if i + 2 < len(tokens) and tokens[i + 1] == '(' and tokens[i + 3] == ')':
-                    # Function with argument
-                    arg = tokens[i + 2]
-                    result.append(f"{tokens[i]}({arg})")  # Mark function call
-                    i += 4
-                else:
-                    result.append(tokens[i])
-                    i += 1
-            else:
-                result.append(tokens[i])
-                i += 1
-        return result
 
     @staticmethod
     def _is_pure_symbolic_arithmetic(expr: str) -> bool:

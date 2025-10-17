@@ -5,8 +5,6 @@ import sympy as sp
 
 from packing_utils import convert_and_pack
 from precision_manager import get_dps
-from priority_rules import precedence_of
-from segment_manager import SegmentManager
 from slice_mixin import SliceMixin
 
 mp.dps = get_dps()
@@ -23,32 +21,6 @@ class MathEngine(ABC):
     def compute(self, expr):
         """Parallel compute method: Calculate all available parts simultaneously, respecting primary level."""
         pass
-
-    @staticmethod
-    def _set_part_order(parts, apply_at_start=True, apply_after_return=False):
-        """Helper: Set part order via priority + left-to-right association. Flows around PEMDAS by respecting priorities within parts.
-
-        - Priority mapping: ^ (highest), * /, + - (lowest). Sums/limits prioritize slice-level.
-        - Applies at start (before computation) and/or after return (post-result).
-        - Returns ordered list for dunder method requests.
-        """
-        priority_map = {
-            '^': 4,  # Exponentiation highest
-            '*': 3, '/': 3,  # Mul/div mid
-            '+': 2, '-': 2,  # Add/sub lowest
-            'sum': 1, 'limit': 1, 'other': 0  # Sums/limits lower, slice-focused
-        }
-
-        def get_priority(part):
-            # Extract op from part (stub: assume part is dict or string with op)
-            op = getattr(part, 'op', str(part).split()[0] if ' ' in str(part) else 'other')
-            return priority_map.get(op, 0)
-
-        if apply_at_start or apply_after_return:
-            # Sort by priority desc, then left-to-right (by original index as tiebreaker)
-            ordered = sorted(enumerate(parts), key=lambda x: (-get_priority(x[1]), x[0]))
-            return [part for _, part in ordered]
-        return parts  # No change if not applying
 
     # Stub dunder methods for math ops (except __add__ which is handled by segment_manager)
     @abstractmethod
@@ -93,56 +65,6 @@ class CalculusEngine(SliceMixin, MathEngine):
         self.traceback_info = []
         self._value = "x"  # Default symbolic var
 
-    # ------------------------------------------------------------------
-    # SliceMixin requirement: how to actually evaluate *one* slice
-    # ------------------------------------------------------------------
-    def _evaluate_atom(self, slice_text: str):
-        """
-        Evaluate a slice that now contains *no parentheses*.
-        Handle ^, *, /, +, - with mpmath high precision.
-        """
-        tokens = self._linear_tokenize(slice_text)      # NEW helper below
-        # Apply operator precedence using priority_rules.py
-        for op_level in [4, 3, 2]:                      # ^  then */  then +-
-            i = 0
-            while i < len(tokens):
-                if precedence_of(tokens[i]) == op_level:
-                    left = mp.mpf(tokens[i-1]); right = mp.mpf(tokens[i+1])
-                    if tokens[i] == '^':
-                        val = mp.power(left, right)
-                    elif tokens[i] == '*':
-                        val = left * right
-                    elif tokens[i] == '/':
-                        val = left / right
-                    elif tokens[i] == '+':
-                        val = left + right
-                    else:
-                        val = left - right
-                    tokens = tokens[:i-1] + [str(val)] + tokens[i+2:]
-                else:
-                    i += 1
-        if len(tokens) != 1:
-            raise ValueError(f'Could not resolve slice: {tokens}')
-        return mp.mpf(tokens[0])
-
-    def _linear_tokenize(self, flat_expr: str):
-        """Simple left-to-right tokenizer for numbers and operators (no parens)."""
-        out, cur = [], ''
-        for ch in flat_expr:
-            if ch.isdigit() or ch == '.':
-                cur += ch
-            elif ch in '+-*/^':
-                if cur:
-                    out.append(cur); cur = ''
-                out.append(ch)
-            elif ch == ' ':
-                continue
-            else:
-                raise ValueError(f'Unexpected char {ch}')
-        if cur:
-            out.append(cur)
-        return out
-
     def _add_traceback(self, step, info):
         """Add step-wise traceback for debugging."""
         try:
@@ -157,17 +79,42 @@ class CalculusEngine(SliceMixin, MathEngine):
             'timestamp': timestamp
         })
 
+    @staticmethod
+    async def _compute_single_part(part):
+        """Stub: Compute single part, respecting priorities."""
+        if 'nest' in str(part):
+            return f"nested_{part}"
+        return part * 2
+
+    async def _compute_parts_parallel(self, parts):
+        """Helper: Compute all parts in parallel, using _set_part_order at start."""
+        ordered_parts = self._set_part_order(parts, apply_at_start=True)
+        tasks = [self._compute_single_part(part) for part in ordered_parts]
+        results = await asyncio.gather(*tasks)
+        # Apply again after return if needed
+        final_results = self._set_part_order(results, apply_after_return=True)
+        for i, result in enumerate(final_results):
+            self.segment_manager.receive_part_order(
+                self.__class__.__name__,
+                f'part_{i}',
+                [{'part': f'part_{i}', 'result': result}]
+            )
+        return final_results
+
     def compute(self, expr):
         """Compute calculus expressions."""
         self._add_traceback('compute_start', f'Expression: {expr}')
-        # Map lowercase aliases → SymPy classes so ‘derivative(...)’ etc. are recognised.
+        # Let SymPy *evaluate* attribute calls like `.subs`, `.simplify`, …
+        # so we never hand a comma to the tokeniser.
         expr = sp.sympify(
             expr,
             locals={
                 'derivative': sp.Derivative,
-                'integral': sp.Integral,
-                'limit': sp.Limit,
-            },  # type: ignore[arg-type]
+                'integral':   sp.Integral,
+                'limit':      sp.Limit,
+            },
+            convert_xor=True,              # keep ^  for power
+            evaluate=True                  # <= key change
         )
         parts = []
 
@@ -330,27 +277,6 @@ class CalculusEngine(SliceMixin, MathEngine):
         self._add_traceback('compute_end', f'Results: {results}')
         return ordered[0] if len(ordered) == 1 else ordered
 
-    @staticmethod
-    async def _compute_single_part(part):
-        """Stub: Compute single part, respecting priorities."""
-        if 'nest' in str(part):
-            return f"nested_{part}"
-        return part * 2
-
-    async def _compute_parts_parallel(self, parts):
-        """Helper: Compute all parts in parallel, using _set_part_order at start."""
-        ordered_parts = self._set_part_order(parts, apply_at_start=True)
-        tasks = [self._compute_single_part(part) for part in ordered_parts]
-        results = await asyncio.gather(*tasks)
-        # Apply again after return if needed
-        final_results = self._set_part_order(results, apply_after_return=True)
-        for i, result in enumerate(final_results):
-            self.segment_manager.receive_part_order(
-                self.__class__.__name__,
-                f'part_{i}',
-                [{'part': f'part_{i}', 'result': result}]
-            )
-        return final_results
 
     def __sub__(self, other):
         """Calculus sub."""

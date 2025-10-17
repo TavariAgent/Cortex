@@ -2,6 +2,9 @@ import asyncio
 from collections import defaultdict
 
 from abc_engines import BasicArithmeticEngine
+from calculus_engine import CalculusEngine
+from complex_algebra_engine import ComplexAlgebraEngine
+from elementary_engine import ElementaryEngine
 from flag_bus import FlagBus
 from trigonometry_engine import TrigonometryEngine
 
@@ -42,7 +45,6 @@ class Structure:
 
     async def _inform_structure(self):
         # Simulate async flag updates
-        await asyncio.sleep(0.01)
         expression = "2 + 3 * 4"
         slices = expression.split()
         slice_map = {i: slice for i, slice in enumerate(slices)}
@@ -231,3 +233,6 @@ if __name__ == '__main__':
     # Add engines to manager
     manager.add_engine('basic', BasicArithmeticEngine)
     manager.add_engine('trig', TrigonometryEngine)
+    manager.add_engine('algebra', ComplexAlgebraEngine)
+    manager.add_engine('elem', ElementaryEngine)
+    manager.add.engine('calc', CalculusEngine)

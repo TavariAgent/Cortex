@@ -5,7 +5,6 @@ import sympy as sp
 
 from packing_utils import convert_and_pack
 from precision_manager import get_dps
-from priority_rules import precedence_of
 from slice_mixin import SliceMixin
 
 mp.dps = get_dps()
@@ -119,32 +118,6 @@ class MathEngine(ABC):
     def _convert_and_pack(parts, *, twos_complement=False):
         return convert_and_pack(parts, twos_complement=twos_complement)
 
-    @staticmethod
-    def _set_part_order(parts, apply_at_start=True, apply_after_return=False):
-        """Helper: Set part order via priority + left-to-right association. Flows around PEMDAS by respecting priorities within parts.
-
-        - Priority mapping: ^ (highest), * /, + - (lowest). Sums/limits prioritize slice-level.
-        - Applies at start (before computation) and/or after return (post-result).
-        - Returns ordered list for dunder method requests.
-        """
-        priority_map = {
-            '^': 4,  # Exponentiation highest
-            '*': 3, '/': 3,  # Mul/div mid
-            '+': 2, '-': 2,  # Add/sub lowest
-            'sum': 1, 'limit': 1, 'other': 0  # Sums/limits lower, slice-focused
-        }
-
-        def get_priority(part):
-            # Extract op from part (stub: assume part is dict or string with op)
-            op = getattr(part, 'op', str(part).split()[0] if ' ' in str(part) else 'other')
-            return priority_map.get(op, 0)
-
-        if apply_at_start or apply_after_return:
-            # Sort by priority desc, then left-to-right (by original index as tiebreaker)
-            ordered = sorted(enumerate(parts), key=lambda x: (-get_priority(x[1]), x[0]))
-            return [part for _, part in ordered]
-        return parts  # No change if not applying
-
 
 class TrigonometryEngine(SliceMixin, MathEngine):
     """Handles trig functions: sin, cos, tan, etc. Implements dunders where ops apply."""
@@ -153,58 +126,6 @@ class TrigonometryEngine(SliceMixin, MathEngine):
         super().__init__(segment_manager)
         self.traceback_info = []
         self._value = "0"
-
-    # ------------------------------------------------------------------
-    # SliceMixin requirement: how to actually evaluate *one* slice
-    # ------------------------------------------------------------------
-    def _evaluate_atom(self, slice_text: str):
-        """
-        Evaluate a slice that now contains *no parentheses*.
-        Handle ^, *, /, +, - with mpmath high precision.
-        """
-        tokens = self._linear_tokenize(slice_text)      # NEW helper below
-        # Apply operator precedence using priority_rules.py
-        for op_level in [4, 3, 2]:                      # ^  then */  then +-
-            i = 0
-            while i < len(tokens):
-                if precedence_of(tokens[i]) == op_level:
-                    left = mp.mpf(tokens[i-1]); right = mp.mpf(tokens[i+1])
-                    if tokens[i] == '^':
-                        val = mp.power(left, right)
-                    elif tokens[i] == '*':
-                        val = left * right
-                    elif tokens[i] == '/':
-                        val = left / right
-                    elif tokens[i] == '+':
-                        val = left + right
-                    else:
-                        val = left - right
-                    tokens = tokens[:i-1] + [str(val)] + tokens[i+2:]
-                else:
-                    i += 1
-        if len(tokens) != 1:
-            raise ValueError(f'Could not resolve slice: {tokens}')
-        return mp.mpf(tokens[0])
-
-
-    @staticmethod
-    def _linear_tokenize(flat_expr: str):
-        """Simple left-to-right tokenizer for numbers and operators (no parens)."""
-        out, cur = [], ''
-        for ch in flat_expr:
-            if ch.isdigit() or ch == '.':
-                cur += ch
-            elif ch in '+-*/^':
-                if cur:
-                    out.append(cur); cur = ''
-                out.append(ch)
-            elif ch == ' ':
-                continue
-            else:
-                raise ValueError(f'Unexpected char {ch}')
-        if cur:
-            out.append(cur)
-        return out
 
     def _add_traceback(self, step, info):
         """Add step-wise traceback for debugging."""
