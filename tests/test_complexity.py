@@ -65,7 +65,6 @@ class ComplexitySuite(unittest.TestCase):
     def test_complex_product(self):
         expr = "(1+2j)*(3+4j)"
         out_str = eval_async(expr).replace(' ', '')
-        # Accept either Python's "(-5+10j)" or SymPy's "-5.0+10.0*I"
         out_str = out_str.replace('*I', 'j')
         result = complex(out_str)
         expected = (1 + 2j) * (3 + 4j)       # (-5+10j)
@@ -76,7 +75,6 @@ class ComplexitySuite(unittest.TestCase):
     def test_grand_mix(self):
         expr = "sin(pi/4) + derivative(x**3, x).subs(x, 2) + (1+0j)"
         out_str = eval_async(expr)
-        # result may come back as complex string or pure real
         out_str = out_str.replace(' ', '').replace('*I', 'j')
         result = complex(out_str) if 'j' in out_str else complex(float(out_str))
         expected = mp.sin(mp.pi / 4) + 3 * 2 ** 2 + 1  # ≈ 13.70710678

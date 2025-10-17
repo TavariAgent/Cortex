@@ -9,6 +9,7 @@ from slice_mixin import SliceMixin
 
 mp.dps = get_dps()
 
+
 class MathEngine(ABC):
     """Abstract base class for all math engines. Enables parallel computation with priority-flow helpers."""
 
@@ -79,8 +80,7 @@ class CalculusEngine(SliceMixin, MathEngine):
             'timestamp': timestamp
         })
 
-    @staticmethod
-    async def _compute_single_part(part):
+    async def _compute_single_part(self, part):
         """Stub: Compute single part, respecting priorities."""
         if 'nest' in str(part):
             return f"nested_{part}"
@@ -101,181 +101,38 @@ class CalculusEngine(SliceMixin, MathEngine):
             )
         return final_results
 
-    def compute(self, expr):
-        """Compute calculus expressions."""
-        self._add_traceback('compute_start', f'Expression: {expr}')
-        # Let SymPy *evaluate* attribute calls like `.subs`, `.simplify`, …
-        # so we never hand a comma to the tokeniser.
-        expr = sp.sympify(
-            expr,
-            locals={
-                'derivative': sp.Derivative,
-                'integral':   sp.Integral,
-                'limit':      sp.Limit,
-            },
-            convert_xor=True,              # keep ^  for power
-            evaluate=True                  # <= key change
-        )
-        parts = []
+    def compute(self, expr: str):
+        """Compute a calculus-level expression and return NUMERIC text."""
+        self._add_traceback('compute_start', expr)
 
-        # ------------------------------------------------------------------
-        # 1️⃣ Fast path ─── the whole expression *is* a Derivative
-        # ------------------------------------------------------------------
-        if isinstance(expr, sp.Derivative):
-            # Evaluate it directly and return; no extra diff-of-diff.
-            result = expr.doit()
-            self._add_traceback(
-                'compute_derivative_direct',
-                f'{expr} -> {result}'
-            )
-            packed_bytes = str(result).encode('utf-8')
-            self._cache.append(packed_bytes)
-            self.segment_manager.receive_packed_segment(self.__class__.__name__,
-                                                        packed_bytes)
-            return result
+        # 1. Parse; force evaluation of derivative/integral/limit
+        expr_sym = sp.sympify(expr,
+                              locals={
+                                  'derivative': sp.diff,
+                                  'diff'      : sp.diff,
+                                  'integral'  : sp.integrate,
+                                  'integrate' : sp.integrate,
+                                  'limit'     : sp.limit,
+                              },
+                              evaluate=True)
 
-        # ------------------------------------------------------------------
-        # 1️⃣ Fast path ─── the whole expression *is* an Integral
-        # ------------------------------------------------------------------
-        if isinstance(expr, sp.Integral):
-            result = expr.doit()
-            self._add_traceback(
-                'compute_integral_direct',
-                f'{expr} -> {result}'
-            )
-            packed_bytes = str(result).encode('utf-8')
-            self._cache.append(packed_bytes)
-            self.segment_manager.receive_packed_segment(self.__class__.__name__,
-                                                        packed_bytes)
-            return result
+        # 2. Resolve any remaining Derivative / Integral / Limit nodes
+        expr_sym = expr_sym.doit().evalf(mp.dps)
 
-        # ------------------------------------------------------------------
-        # 1️⃣ Fast path ─── the whole expression *is* a Limit
-        # ------------------------------------------------------------------
-        if isinstance(expr, sp.Limit):
-            result = expr.doit()
-            self._add_traceback(
-                'compute_limit_direct',
-                f'{expr} -> {result}'
-            )
-            packed_bytes = str(result).encode('utf-8')
-            self._cache.append(packed_bytes)
-            self.segment_manager.receive_packed_segment(self.__class__.__name__,
-                                                        packed_bytes)
-            return result
+        # 3. If the result is still symbolic try numerical eval
+        try:
+            num_val = expr_sym.evalf(mp.dps)       # type: ignore[attr-defined]
+            result  = mp.mpf(str(num_val))
+        except (TypeError, ValueError):
+            # still symbolic ⇒ hand the unevaluated string upward
+            result = expr_sym
 
-        # ------------------------------------------------------------------
-        # 2️⃣ Mixed expression that *contains* derivatives
-        # ------------------------------------------------------------------
-        if expr.has(sp.Derivative):
-            # Evaluate only the inner Derivative nodes, keep outer structure.
-            expr = expr.doit(deep=False)
-            self._add_traceback(
-                'compute_inner_derivatives',
-                f'Inner derivatives evaluated -> {expr}'
-            )
-        if expr.has(sp.Integral):
-            # Evaluate only the inner Integral nodes, keep outer structure.
-            expr = expr.doit(deep=False)
-            self._add_traceback(
-                'compute_inner_integrals',
-                f'Inner integrals evaluated -> {expr}'
-            )
-        if expr.has(sp.Limit):
-            # Evaluate only the inner Limit nodes, keep outer structure.
-            expr = expr.doit(deep=False)
-            self._add_traceback(
-                'compute_inner_limits',
-                f'Inner limits evaluated -> {expr}'
-            )
-        if expr.is_Symbol:
-            self._value = str(expr)
-            # Calculate integral
-            parts = expr.find(lambda x: x.is_Integral)
-            self._add_traceback(
-                'compute_integral',
-                f'Calculus expression: {expr}, Integral: {parts}'
-            )
-            if parts:
-                return self.integral(str(expr), self._value)
-                # Calculate limit
-            parts = expr.find(lambda x: x.is_Limit)
-            self._add_traceback(
-                'compute_limit',
-                f'Calculus expression: {expr}, Limit: {parts}'
-            )
-            if parts:
-                return self.limit(str(expr), self._value, 'infinity')
-                # Calculate Critical Points
-            parts = expr.find(lambda x: x.is_Function)
-            self._add_traceback(
-                'compute_critical_points',
-                f'Calculus expression: {expr}, Critical Points: {parts}'
-            )
-            if parts:
-                return self.critical_points(str(expr), self._value)
-                # Calculate definite integral
-            parts = expr.find(lambda x: x.is_Integral)
-            self._add_traceback(
-                'compute_definite_integral',
-                f'Calculus expression: {expr}, Definite Integral: {parts}'
-            )
-            if parts:
-                return self.definite_integral(str(expr), self._value, 0, 1)
-                # Calculate u-substitution
-            parts = expr.find(lambda x: x.is_Function)
-            self._add_traceback(
-                'compute_u_substitution',
-                f'Calculus expression: {expr}, u-substitution: {parts}'
-            )
-            if parts:
-                return self.u_substitution(str(expr), 'u', 'du', self._value)
-                # Calculate chain rule
-            parts = expr.find(lambda x: x.is_Function)
-            self._add_traceback(
-                'compute_chain_rule',
-                f'Calculus expression: {expr}, Chain Rule: {parts}'
-            )
-            if parts:
-                return self.chain_rule(str(expr), 'f', self._value)
-                # Calculate product rule
-            parts = expr.find(lambda x: x.is_Mul)
-            self._add_traceback(
-                'compute_product_rule',
-                f'Calculus expression: {expr}, Product Rule: {parts}'
-            )
-            if parts:
-                return self.product_rule(str(expr), 'u', self._value)
-                # Calculate quotient rule
-            parts = expr.find(lambda x: x.is_Mul)
-            self._add_traceback(
-                'compute_quotient_rule',
-                f'Calculus expression: {expr}, Quotient Rule: {parts}'
-            )
-            if parts:
-                return self.quotient_rule(str(expr), 'u', self._value)
-                # Calculate integration by parts
-            parts = expr.find(lambda x: x.is_Integral)
-            self._add_traceback(
-                'compute_integration_by_parts',
-                f'Calculus expression: {expr}, Integration by Parts: {parts}'
-            )
-            if parts:
-                return self.integration_by_parts(str(expr), 'u', self._value)
-                # Calculate Taylor series expansion
-            parts = expr.find(lambda x: x.is_Function)
-            self._add_traceback(
-                'compute_taylor_series_expansion',
-                f'Calculus expression: {expr}, Taylor Series Expansion: {parts}'
-            )
-            if parts:
-                return self.taylor_series_expansion(str(expr), 'f', self._value)
-
-        ordered_parts = self._set_part_order(parts)
-        results = asyncio.run(self._compute_parts_parallel(ordered_parts))
-        ordered = self._set_part_order(results)
-        self._add_traceback('compute_end', f'Results: {results}')
-        return ordered[0] if len(ordered) == 1 else ordered
+        # 4. Pack & return
+        packed = str(result).encode()
+        self._cache.append(packed)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed)
+        self._add_traceback('compute_end', f'{expr_sym} -> {result}')
+        return str(result)
 
 
     def __sub__(self, other):
@@ -297,149 +154,3 @@ class CalculusEngine(SliceMixin, MathEngine):
         """Calculus pow (stub)."""
         self._add_traceback('__pow__', f'Calculus pow: {other}')
         return self
-
-    def derivative(self, f, var):
-        """Compute derivative using SymPy."""
-        self._add_traceback('derivative', f'd/d{var} {f}')
-        func = sp.sympify(f)
-        v = sp.symbols(var)
-        result = sp.diff(func, v)
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def integral(self, f, var):
-        """Compute integral using SymPy."""
-        self._add_traceback('integral', f'∫ {f} d{var}')
-        func = sp.sympify(f)
-        v = sp.symbols(var)
-        result = sp.integrate(func, v)
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def limit(self, expr, var, point):
-        """Compute limit of expr as var approaches point (supports infinity)."""
-        self._add_traceback('limit', f'lim_{var}->{point} {expr}')
-        func = sp.sympify(expr)
-        v = sp.symbols(var)
-        if point == 'infinity':
-            result = sp.limit(func, v, sp.oo)
-        elif point == '-infinity':
-            result = sp.limit(func, v, -sp.oo)
-        else:
-            result = sp.limit(func, v, sp.sympify(point))
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def second_derivative(self, f, var):
-        """Compute second derivative (curvature/concavity)."""
-        self._add_traceback('second_derivative', f'd²/d{var}² {f}')
-        func = sp.sympify(f)
-        v = sp.symbols(var)
-        result = sp.diff(func, v, 2)
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def critical_points(self, f, var):
-        """Find critical points (where f'(x)=0 or undefined)."""
-        self._add_traceback('critical_points', f'Critical points of {f} w.r.t {var}')
-        func = sp.sympify(f)
-        v = sp.symbols(var)
-        deriv = sp.diff(func, v)
-        solutions = sp.solve(deriv, v)
-        packed_bytes = str(solutions).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return solutions
-
-    def definite_integral(self, f, var, a, b):
-        """Compute definite integral from a to b."""
-        self._add_traceback('definite_integral', f'∫_{a}^{b} {f} d{var}')
-        func = sp.sympify(f)
-        v = sp.symbols(var)
-        result = sp.integrate(func, (v, a, b))
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def u_substitution(self, expr, u_expr, du_expr, var):
-        """Perform u-substitution for integration."""
-        self._add_traceback('u_substitution', f'u-sub: {expr}, u={u_expr}, du={du_expr}')
-        # Simplified: Assume expr can be rewritten
-        func = sp.sympify(expr)
-        u = sp.sympify(u_expr)
-        du = sp.sympify(du_expr)
-        v = sp.symbols(var)
-        # Basic substitution (expand for full logic)
-        result = sp.integrate(func.subs(v, u), du)
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def chain_rule(self, outer, inner, var):
-        """Apply chain rule for differentiation."""
-        self._add_traceback('chain_rule', f'Chain: {outer}({inner}) w.r.t {var}')
-        outer_func = sp.sympify(outer)
-        inner_func = sp.sympify(inner)
-        v = sp.symbols(var)
-        u = sp.symbols('u')
-        result = sp.diff(outer_func.subs(u, inner_func), v).subs(u, inner_func)
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def product_rule(self, u, v, var):
-        """Apply product rule for differentiation."""
-        self._add_traceback('product_rule', f'Product: ({u})({v}) w.r.t {var}')
-        u_func = sp.sympify(u)
-        v_func = sp.sympify(v)
-        w = sp.symbols(var)
-        result = sp.diff(u_func, w) * v_func + u_func * sp.diff(v_func, w)
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def quotient_rule(self, u, v, var):
-        """Apply quotient rule for differentiation."""
-        self._add_traceback('quotient_rule', f'Quotient: ({u})/({v}) w.r.t {var}')
-        u_func = sp.sympify(u)
-        v_func = sp.sympify(v)
-        w = sp.symbols(var)
-        numerator = sp.diff(u_func, w) * v_func - u_func * sp.diff(v_func, w)
-        denominator = v_func ** 2
-        result = numerator / denominator
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def integration_by_parts(self, u, dv, var):
-        """Apply integration by parts."""
-        self._add_traceback('integration_by_parts', f'IBP: u={u}, dv={dv} w.r.t {var}')
-        u_func = sp.sympify(u)
-        dv_func = sp.sympify(dv)
-        w = sp.symbols(var)
-        v = sp.integrate(dv_func, w)
-        result = u_func * v - sp.integrate(sp.diff(u_func, w) * v, w)
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def taylor_series_expansion(self, f, var, n):
-        """Compute Taylor series expansion of f up to order n."""
-        self._add_traceback('taylor_series_expansion', f'Taylor series expansion of {f} up to order {n}')
-        func = sp.sympify(f)
-        v = sp.symbols(var)
-        result = sp.series(func, v, n)

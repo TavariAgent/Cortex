@@ -20,6 +20,7 @@ from calculus_engine     import CalculusEngine
 from complex_algebra_engine import ComplexAlgebraEngine   # placeholder
 
 _ENGINE_MAP = {
+    # trigonometry
     sp.sin:  'trig',
     sp.cos:  'trig',
     sp.tan:  'trig',
@@ -32,13 +33,15 @@ _ENGINE_MAP = {
     sp.asinh: 'trig',
     sp.acosh: 'trig',
     sp.atanh: 'trig',
+    # elementary
     sp.exp:  'elem',
     sp.log:  'elem',
     sp.sqrt: 'elem',
     sp.Abs:   'elem',
+    # calculus
     sp.Derivative: 'calc',
-    sp.Integral:   'calc',
-    sp.Limit:      'calc',
+    sp.Integral: 'calc',
+    sp.Limit: 'calc',
     # extend as needed
 }
 
@@ -58,7 +61,7 @@ class PartInspector:
         """
         Master entry: return numeric / mp.mpf / mp.mpc result of expr_txt.
         """
-        raw_tree = sp.sympify(expr_txt, convert_xor=True)
+        raw_tree = sp.sympify(expr_txt)
         substituted = await self._resolve_tree(raw_tree)
         # At this point the tree should contain only +−*/^ and literals
         final = self._engines['arith'].compute(str(substituted))
@@ -82,7 +85,11 @@ class PartInspector:
         if eng_key == 'calc':
             txt = str(node)
             val_str = self._engines['calc'].compute(txt)
-            return sp.sympify(val_str)  # may be symbolic exact
+            # If the result is still symbolic, force numeric evaluation
+            try:
+                return mp.mpf(str(val_str))
+            except Exception:
+                return sp.sympify(val_str)
 
         if eng_key == 'elem':
             txt = str(node)

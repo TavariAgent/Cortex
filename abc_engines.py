@@ -97,7 +97,7 @@ class BasicArithmeticEngine(SliceMixin, MathEngine):
         """Return True iff expr is made only of '+-*/^', numbers,
         SymPy named constants, or symbols – i.e. no functions."""
         try:
-            tree = sympify(expr, convert_xor=True, evaluate=False)
+            tree = sympify(expr, evaluate=True)
         except Exception:
             return False
         return all(node.is_Atom or node.is_Pow or node.is_Add or node.is_Mul

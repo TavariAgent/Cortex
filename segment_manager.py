@@ -31,7 +31,8 @@ class SegmentManager:
             self.segment_pools[engine_name] = []
         self.segment_pools[engine_name].append(packed_bytes)
 
-    def _determine_level(self, slice_data):
+    @staticmethod
+    def _determine_level(slice_data):
         """Stub: Determine structural level of slice (e.g., from expression nesting)."""
         # Example: Parse slice_data for nesting depth
         return len(slice_data.split('_'))  # Simple proxy for level

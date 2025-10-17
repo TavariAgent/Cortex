@@ -134,7 +134,6 @@ class XorStringCompiler:
     def __xor__(self, other):
         """Create XOR dict pools for engines and flags."""
         xor_dirs = [{'op': 'xor', 'targets': self.byte_strings}]
-        math_engines = {'add': lambda x, y: x + y, 'mul': lambda x, y: x * y}
         self.flag_pool = {'xor_active': True, 'engines_done': False}
         # Create pools for each engine (stub: assume engine names)
         for engine_name in ['basic', 'trig', 'complex']:
@@ -188,28 +187,6 @@ class Compute:
         self.compiler = compiler
         self.manager = manager
 
-    async def _compute_expression(self):
-        """Enabler finalization: Trigger when engines done, enable __str__ for formalization."""
-        # Wait for engines_done flag
-        while not self.compiler.flag_pool.get('engines_done', False):
-            await asyncio.sleep(0.1)
-        # Trigger full expression to __str__ again
-        formalized = str(self.compiler)  # Formalize pools into object
-        # Compile segments into result
-        compiled = self._compile_expression()
-        return compiled
-
-    def _compile_expression(self):
-        """Compile segments from pools into final result."""
-        final_bytes = b''
-        for pool in self.segment_pools.values():
-            for seg in pool.values():
-                final_bytes += seg
-        try:
-            final_int = int.from_bytes(final_bytes, 'big')
-            return str(final_int)
-        except:
-            return final_bytes.decode('utf-8', errors='ignore')
 
 class Diagnostic:
     """Class for reporting diagnostics and errors."""
@@ -235,4 +212,4 @@ if __name__ == '__main__':
     manager.add_engine('trig', TrigonometryEngine)
     manager.add_engine('algebra', ComplexAlgebraEngine)
     manager.add_engine('elem', ElementaryEngine)
-    manager.add.engine('calc', CalculusEngine)
+    manager.add_engine('calc', CalculusEngine)
