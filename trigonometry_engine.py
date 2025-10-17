@@ -261,7 +261,26 @@ class TrigonometryEngine(SliceMixin, MathEngine):
     def compute(self, expr):
         """Compute trig expressions with symbolic arg evaluation, pi recognition, and angle snapping."""
         self._add_traceback('compute_start', f'Expression: {expr}')
-        if 'sin(' in expr:
+
+        # ── 1.  mixed expression with + – * / ? ──────────────────────
+        if any(op in expr for op in ('+', '-', '*', '/', '^')):
+            try:
+                sy = sp.sympify(expr, locals={'sin': sp.sin,
+                                              'cos': sp.cos,
+                                              'tan': sp.tan})
+                num = sy.evalf(mp.dps)  # evaluate at current precision
+                self._add_traceback('sympy_eval', f'{sy} -> {num}')
+                result = mp.mpf(str(num))
+                packed = convert_and_pack([result])
+                self._cache.append(packed)
+                self.segment_manager.receive_packed_segment(self.__class__.__name__, packed)
+                return str(result)
+            except Exception as e:
+                self._add_traceback('sympy_fail', str(e))
+                # fall-through to single-call parser
+
+        # ── 2.  single trig call  ─────────────────────────────────────
+        if expr.startswith('sin('):
             arg_str = expr.split('sin(')[1].rstrip(')')
             try:
                 sym_expr = sp.sympify(arg_str)
