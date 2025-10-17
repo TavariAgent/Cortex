@@ -10,6 +10,26 @@ from slice_mixin import SliceMixin
 
 mp.dps = get_dps()
 
+# Helper to build the exact-angle lookup table
+
+def _build_angle_table():
+    table = {}
+    dens = [1, 2, 3, 4, 5, 6, 8, 10, 12]
+    for d in dens:
+        for n in range(0, 2*d + 1):  # cover 0 .. 2 inclusive
+            r = sp.Rational(n, d)
+            key = sp.Rational(0, 1) if r == 2 else r
+            if key in table:
+                continue
+            angle = sp.pi * r
+            s = sp.simplify(sp.sin(angle))
+            c = sp.simplify(sp.cos(angle))
+            t = sp.simplify(sp.tan(angle))
+            if t is sp.zoo:
+                t = sp.oo  # unify representation
+            table[key] = {'sin': s, 'cos': c, 'tan': t}
+    return table
+
 class MathEngine(ABC):
     """Abstract base class for all math engines. Enables parallel computation with priority-flow helpers."""
 
@@ -21,34 +41,9 @@ class MathEngine(ABC):
     # ──────────────────────────────────────────────────────────────────
     #  Exact-angle lookup
     # ──────────────────────────────────────────────────────────────────
-    _ANGLE_TABLE = {
-        sp.Rational(0, 1):    {'sin': 0, 'cos': 1, 'tan': 0},
-        sp.Rational(1, 6):    {'sin': sp.Rational(1, 2),
-                               'cos': sp.sqrt(3)/2,
-                               'tan': sp.sqrt(3)/3},
-        sp.Rational(1, 4):    {'sin': sp.sqrt(2)/2,
-                               'cos': sp.sqrt(2)/2,
-                               'tan': 1},
-        sp.Rational(1, 3):    {'sin': sp.sqrt(3)/2,
-                               'cos': sp.Rational(1, 2),
-                               'tan': sp.sqrt(3)},
-        sp.Rational(1, 2):    {'sin': 1,
-                               'cos': 0,
-                               'tan': sp.oo},
-        sp.Rational(2, 3):    {'sin': sp.sqrt(3)/2,
-                               'cos': -sp.Rational(1, 2),
-                               'tan': -sp.sqrt(3)},
-        sp.Rational(3, 4):    {'sin':  sp.sqrt(2)/2,
-                               'cos': -sp.sqrt(2)/2,
-                               'tan': -1},
-        sp.Rational(5, 6):    {'sin':  sp.Rational(1, 2),
-                               'cos': -sp.sqrt(3)/2,
-                               'tan': -sp.sqrt(3)/3},
-        sp.Rational(1, 1):    {'sin': 0,
-                               'cos': -1,
-                               'tan': 0},
-        # Add more multiples if desired
-    }
+    # Build an exact-angle lookup for multiples of pi with improved readability
+    # and broader coverage. See module-level _build_angle_table().
+    _ANGLE_TABLE = _build_angle_table()
 
     @classmethod
     def _lookup_exact(cls, arg_mpf):
@@ -57,20 +52,20 @@ class MathEngine(ABC):
         If found in table, return (True, sin_val, cos_val, tan_val),
         else (False, None, None, None).
         """
-        # Convert mp.mpf → SymPy Float with current precision
-        sp_val = sp.nsimplify(arg_mpf, [sp.pi])
-        if isinstance(sp_val, sp.Mul) and sp.pi in sp_val.args:
-            ratio = sp_val / sp.pi
-        elif sp_val == 0:
-            ratio = sp.Rational(0, 1)
-        else:
+        # Convert mp.mpf -> SymPy rational multiple of pi
+        try:
+            ratio = sp.nsimplify(mp.mpf(arg_mpf) / mp.pi)
+        except Exception:
             return False, None, None, None
 
-        # Reduce modulo 2π (ratio modulo 2)
-        ratio = sp.fraction(ratio)[0] % 2  # numerator mod 2
-        if ratio > 1:
-            ratio -= 2  # map to (-1,1]
-        ratio = sp.Rational(ratio).limit_denominator()
+        # Must be a rational multiple to match table
+        if not isinstance(ratio, sp.Rational):
+            return False, None, None, None
+
+        # Reduce to principal range [0, 2)
+        ratio = ratio % 2
+        if ratio == 2:
+            ratio = sp.Rational(0, 1)
 
         if ratio in cls._ANGLE_TABLE:
             entry = cls._ANGLE_TABLE[ratio]
@@ -84,7 +79,7 @@ class MathEngine(ABC):
         pass
 
     @staticmethod
-    async def _compute_single_part(self, part):
+    async def _compute_single_part(part):
         """Stub: Compute single part, respecting priorities."""
         if 'nest' in str(part):
             return f"nested_{part}"
@@ -114,6 +109,41 @@ class MathEngine(ABC):
         slice_data = 'slice_1'  # From expression parsing
         self.segment_manager.receive_part_order(self.__class__.__name__, slice_data, part_order)
         return self  # Or metadata
+
+    @staticmethod
+    def _normalise_small(x, *, eps=None):
+        eps = eps or mp.mpf(10) ** (-mp.dps + 2)  # ~100 ulps
+        return mp.mpf(0) if mp.fabs(x) < eps else x
+
+    @staticmethod
+    def _convert_and_pack(parts, *, twos_complement=False):
+        return convert_and_pack(parts, twos_complement=twos_complement)
+
+    @staticmethod
+    def _set_part_order(parts, apply_at_start=True, apply_after_return=False):
+        """Helper: Set part order via priority + left-to-right association. Flows around PEMDAS by respecting priorities within parts.
+
+        - Priority mapping: ^ (highest), * /, + - (lowest). Sums/limits prioritize slice-level.
+        - Applies at start (before computation) and/or after return (post-result).
+        - Returns ordered list for dunder method requests.
+        """
+        priority_map = {
+            '^': 4,  # Exponentiation highest
+            '*': 3, '/': 3,  # Mul/div mid
+            '+': 2, '-': 2,  # Add/sub lowest
+            'sum': 1, 'limit': 1, 'other': 0  # Sums/limits lower, slice-focused
+        }
+
+        def get_priority(part):
+            # Extract op from part (stub: assume part is dict or string with op)
+            op = getattr(part, 'op', str(part).split()[0] if ' ' in str(part) else 'other')
+            return priority_map.get(op, 0)
+
+        if apply_at_start or apply_after_return:
+            # Sort by priority desc, then left-to-right (by original index as tiebreaker)
+            ordered = sorted(enumerate(parts), key=lambda x: (-get_priority(x[1]), x[0]))
+            return [part for _, part in ordered]
+        return parts  # No change if not applying
 
 
 class TrigonometryEngine(SliceMixin, MathEngine):
@@ -157,7 +187,8 @@ class TrigonometryEngine(SliceMixin, MathEngine):
         return mp.mpf(tokens[0])
 
 
-    def _linear_tokenize(self, flat_expr: str):
+    @staticmethod
+    def _linear_tokenize(flat_expr: str):
         """Simple left-to-right tokenizer for numbers and operators (no parens)."""
         out, cur = [], ''
         for ch in flat_expr:
@@ -189,32 +220,6 @@ class TrigonometryEngine(SliceMixin, MathEngine):
             'timestamp': timestamp
         })
 
-    @staticmethod
-    def _set_part_order(parts, apply_at_start=True, apply_after_return=False):
-        """Helper: Set part order via priority + left-to-right association. Flows around PEMDAS by respecting priorities within parts.
-
-        - Priority mapping: ^ (highest), * /, + - (lowest). Sums/limits prioritize slice-level.
-        - Applies at start (before computation) and/or after return (post-result).
-        - Returns ordered list for dunder method requests.
-        """
-        priority_map = {
-            '^': 4,  # Exponentiation highest
-            '*': 3, '/': 3,  # Mul/div mid
-            '+': 2, '-': 2,  # Add/sub lowest
-            'sum': 1, 'limit': 1, 'other': 0  # Sums/limits lower, slice-focused
-        }
-
-        def get_priority(part):
-            # Extract op from part (stub: assume part is dict or string with op)
-            op = getattr(part, 'op', str(part).split()[0] if ' ' in str(part) else 'other')
-            return priority_map.get(op, 0)
-
-        if apply_at_start or apply_after_return:
-            # Sort by priority desc, then left-to-right (by original index as tiebreaker)
-            ordered = sorted(enumerate(parts), key=lambda x: (-get_priority(x[1]), x[0]))
-            return [part for _, part in ordered]
-        return parts  # No change if not applying
-
     async def _compute_parts_parallel(self, parts):
         """Helper: Compute all parts in parallel, using _set_part_order at start."""
         ordered_parts = self._set_part_order(parts, apply_at_start=True)
@@ -229,10 +234,6 @@ class TrigonometryEngine(SliceMixin, MathEngine):
                 [{'part': f'part_{i}', 'result': result}]
             )
         return final_results
-
-    @staticmethod
-    def _convert_and_pack(parts, *, twos_complement=False):
-        return convert_and_pack(parts, twos_complement=twos_complement)
 
     @staticmethod
     def snap_to_angle(arg, *, max_multiple: int = 4):
@@ -334,6 +335,123 @@ class TrigonometryEngine(SliceMixin, MathEngine):
         """Compute cos using mpmath."""
         self._add_traceback('cos', f'cos({x})')
         result = mp.cos(mp.mpf(str(x)))
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def tan(self, x):
+        """Compute tan using mpmath."""
+        self._add_traceback('tan', f'tan({x})')
+        result = mp.tan(mp.mpf(str(x)))
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def sqrt(self, x):
+        """Compute sqrt using mpmath."""
+        self._add_traceback('sqrt', f'sqrt({x})')
+        result = mp.sqrt(mp.mpf(str(x)))
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def cbrt(self, x):
+        """Compute cbrt using mpmath."""
+        self._add_traceback('cbrt', f'cbrt({x})')
+        result = mp.cbrt(mp.mpf(str(x)))
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def atan(self, x):
+        """Compute atan using mpmath."""
+        self._add_traceback('atan', f'atan({x})')
+        result = mp.atan(mp.mpf(str(x)))
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def asin(self, x):
+        """Compute asin using mpmath."""
+        self._add_traceback('asin', f'asin({x})')
+        result = mp.asin(mp.mpf(str(x)))
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def acos(self, x):
+        """Compute acos using mpmath."""
+        self._add_traceback('acos', f'acos({x})')
+        result = mp.acos(mp.mpf(str(x)))
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def atan2(self, y, x):
+        """Compute atan2 using mpmath."""
+        self._add_traceback('atan2', f'atan2({y}, {x})')
+        result = mp.atan2(mp.mpf(str(y)), mp.mpf(str(x)))
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def asinh(self, x):
+        """Compute asinh using mpmath."""
+        self._add_traceback('asinh', f'asinh({x})')
+        result = mp.asinh(mp.mpf(str(x)))
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def acosh(self, x):
+        """Compute acosh using mpmath."""
+        self._add_traceback('acosh', f'acosh({x})')
+        result = mp.acosh(mp.mpf(str(x)))
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def atanh(self, x):
+        """Compute atanh using mpmath."""
+        self._add_traceback('atanh', f'atanh({x})')
+        result = mp.atanh(mp.mpf(str(x)))
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def sinh(self, x):
+        """Compute sinh using mpmath."""
+        self._add_traceback('sinh', f'sinh({x})')
+        result = mp.sinh(mp.mpf(str(x)))
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def cosh(self, x):
+        """Compute cosh using mpmath."""
+        self._add_traceback('cosh', f'cosh({x})')
+        result = mp.cosh(mp.mpf(str(x)))
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def tanh(self, x):
+        """Compute tanh using mpmath."""
+        self._add_traceback('tanh', f'tanh({x})')
+        result = mp.tanh(mp.mpf(str(x)))
         packed_bytes = str(result).encode('utf-8')
         self._cache.append(packed_bytes)
         self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)

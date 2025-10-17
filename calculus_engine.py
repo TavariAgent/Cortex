@@ -76,6 +76,11 @@ class MathEngine(ABC):
         return self  # Or metadata
 
     @staticmethod
+    def _normalise_small(x, *, eps=None):
+        eps = eps or mp.mpf(10) ** (-mp.dps + 2)  # ~100 ulps
+        return mp.mpf(0) if mp.fabs(x) < eps else x
+
+    @staticmethod
     def _convert_and_pack(parts, *, twos_complement=False):
         return convert_and_pack(parts, twos_complement=twos_complement)
 

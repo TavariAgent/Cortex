@@ -1,11 +1,13 @@
 import functools
 from abc import ABC, abstractmethod
 import asyncio
+from typing import List
+
 import numpy as np
 from mpmath import mp
 from decimal import Decimal
 from sympy import sympify, nsimplify, srepr
-
+from utils.trace_helpers import add_traceback
 from packing_utils import convert_and_pack
 from precision_manager import get_dps
 from priority_rules import precedence_of
@@ -88,6 +90,11 @@ class MathEngine(ABC):
         pass
 
     @staticmethod
+    def _normalise_small(x, *, eps=None):
+        eps = eps or mp.mpf(10) ** (-mp.dps + 2)  # ~100 ulps
+        return mp.mpf(0) if mp.fabs(x) < eps else x
+
+    @staticmethod
     def _convert_and_pack(parts, *, twos_complement=False):
         return convert_and_pack(parts, twos_complement=twos_complement)
 
@@ -99,7 +106,11 @@ class BasicArithmeticEngine(SliceMixin, MathEngine):
         super().__init__(segment_manager)
         self.traceback_info = []  # For step-wise debug info
         self._value = "0"  # Default value for chaining
+        self.traceback_info: List[dict] = []
         # _cache is inherited from MathEngine
+
+    def _add_traceback(self, step, info):
+        add_traceback(self, step, info)
 
     # ------------------------------------------------------------------
     # SliceMixin requirement: how to actually evaluate *one* slice
@@ -151,22 +162,8 @@ class BasicArithmeticEngine(SliceMixin, MathEngine):
             out.append(cur)
         return out
 
-    def _add_traceback(self, step, info):
-        """Add step-wise traceback for debugging."""
-        try:
-            loop = asyncio.get_running_loop()
-            timestamp = loop.time()
-        except RuntimeError:
-            # No running event loop
-            timestamp = 0
-
-        self.traceback_info.append({
-            'step': step,
-            'info': info,
-            'timestamp': timestamp
-        })
-
-    def _validate_number(self, num_str):
+    @staticmethod
+    def _validate_number(num_str):
         """Validate a number string has at most one decimal point."""
         if num_str.count('.') > 1:
             raise ValueError(f"Invalid number format: {num_str}")
@@ -200,7 +197,7 @@ class BasicArithmeticEngine(SliceMixin, MathEngine):
         return result
 
     @staticmethod
-    def _detect_functions(self, tokens):
+    def _detect_functions(tokens):
         """Detect and mark functions in tokens."""
         result = []
         i = 0
@@ -237,7 +234,7 @@ class BasicArithmeticEngine(SliceMixin, MathEngine):
         Uses mpmath for high precision computation, avoiding floats and Decimals as per guidelines.
         Integrates with parallel flow and segment manager.
         """
-        self._add_traceback('compute_start', expr)
+        add_traceback(self, 'compute_start', f'Expr: {expr}', with_stack=False)
 
         # Parse the expression
         expr = expr.strip()

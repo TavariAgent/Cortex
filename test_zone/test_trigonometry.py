@@ -25,16 +25,34 @@ def test_trigonometry():
     engine = TrigonometryEngine(segment_mgr)
 
     # Test sin
-    result_sin = engine.compute('sin(3.14159)')
-    expected_sin = "0.0"  # Approx sin(pi) ≈ 0
-    success_sin = abs(float(result_sin) - float(expected_sin)) < 1e-5
-    print(f"sin(3.14159): {result_sin} (Expected: ~{expected_sin}) - Success: {success_sin}")
+    result_sin = engine.compute('sin(pi/2)')
+    expected_sin = "1.0"
+    success_sin = abs(float(result_sin) - float(expected_sin)) < 1e-10
+    print(f"sin(pi/2): {result_sin} (Expected: {expected_sin}) - Success: {success_sin}")
 
     # Test cos
     result_cos = engine.compute('cos(0)')
     expected_cos = "1.0"
     success_cos = abs(float(result_cos) - float(expected_cos)) < 1e-10
     print(f"cos(0): {result_cos} (Expected: {expected_cos}) - Success: {success_cos}")
+
+    # Test tan
+    result_tan = engine.compute('tan(pi/4)')
+    expected_tan = "1.0"
+    success_tan = abs(float(result_tan) - float(expected_tan)) < 1e-10
+    print(f"tan(pi/4): {result_tan} (Expected: {expected_tan}) - Success: {success_tan}")
+
+    # Test trigonometry angles
+    result_sin = engine.compute('sin(pi/6)')
+    expected_sin = "0.5"
+    success_sin = abs(float(result_sin) - float(expected_sin)) < 1e-10
+    print(f"sin(pi/6): {result_sin} (Expected: {expected_sin}) - Success: {success_sin}")
+
+    result_cos = engine.compute('cos(pi/3)')
+    expected_cos = "0.5"
+    success_cos = abs(float(result_cos) - float(expected_cos)) < 1e-10
+    print(f"cos(pi/3): {result_cos} (Expected: {expected_cos}) - Success: {success_cos}")
+
 
     # Overall
     all_success = success_sin and success_cos

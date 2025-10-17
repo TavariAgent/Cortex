@@ -23,7 +23,8 @@ class MathEngine(ABC):
         """Parallel compute method: Calculate all available parts simultaneously, respecting primary level."""
         pass
 
-    def _set_part_order(self, parts, apply_at_start=True, apply_after_return=False):
+    @staticmethod
+    def _set_part_order(parts, apply_at_start=True, apply_after_return=False):
         """Helper: Set part order via priority + left-to-right association. Flows around PEMDAS by respecting priorities within parts.
 
         - Priority mapping: ^ (highest), * /, + - (lowest). Sums/limits prioritize slice-level.
@@ -63,7 +64,8 @@ class MathEngine(ABC):
             )
         return final_results
 
-    async def _compute_single_part(self, part):
+    @staticmethod
+    async def _compute_single_part(part):
         """Stub: Compute single part, respecting priorities."""
         if 'nest' in str(part):
             return f"nested_{part}"
@@ -93,6 +95,11 @@ class MathEngine(ABC):
         slice_data = 'slice_1'  # From expression parsing
         self.segment_manager.receive_part_order(self.__class__.__name__, slice_data, part_order)
         return self  # Or metadata
+
+    @staticmethod
+    def _normalise_small(x, *, eps=None):
+        eps = eps or mp.mpf(10) ** (-mp.dps + 2)  # ~100 ulps
+        return mp.mpf(0) if mp.fabs(x) < eps else x
 
     @staticmethod
     def _convert_and_pack(parts, *, twos_complement=False):

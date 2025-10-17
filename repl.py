@@ -8,7 +8,10 @@ Type expressions like '2+3', 'sin(pi)', or 'derivative(x**2, x)'. Type 'quit' to
 import sys
 import os
 
+from calculus_engine import CalculusEngine
+from complex_algebra_engine import ComplexAlgebraEngine
 from precision_manager import presets, get_dps, set_dps
+from trigonometry_engine import TrigonometryEngine
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -55,6 +58,9 @@ def main():
                         set_dps(new_dps)
                         # refresh engine instances with new mp.dps
                         engine = BasicArithmeticEngine(segment_mgr)
+                        engine = CalculusEngine(segment_mgr)
+                        engine = TrigonometryEngine(segment_mgr)
+                        engine = ComplexAlgebraEngine(segment_mgr)
                         print(f"Precision set to {new_dps} dps")
                     except Exception as e:
                         print(f"Error: {e}")
