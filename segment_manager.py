@@ -1,4 +1,5 @@
 from flag_bus import FlagBus
+from priority_rules import precedence_of, PRIORITY
 
 
 class SegmentManager:
@@ -47,14 +48,6 @@ class SegmentManager:
         slice_map = snapshot['interval_slice_map']
         assembled = {}
         level_groups = {}  # Group by level for left-to-right sorting
-        
-        # Priority map for operator precedence (matches MathEngine._set_part_order)
-        priority_map = {
-            '^': 4,  # Exponentiation highest
-            '*': 3, '/': 3,  # Mul/div mid
-            '+': 2, '-': 2,  # Add/sub lowest
-            'sum': 1, 'limit': 1, 'other': 0  # Sums/limits lower, slice-focused
-        }
 
         for engine, orders in self.part_orders.items():
             for order in orders:
@@ -64,11 +57,11 @@ class SegmentManager:
                     level_groups[level] = []
                 # Extract operator from slice_id for priority ordering
                 op = None
-                for op_char in priority_map.keys():
+                for op_char in PRIORITY.keys():
                     if op_char in slice_id:
                         op = op_char
                         break
-                priority = priority_map.get(op, 0)
+                priority = PRIORITY.get(op, 0)
                 level_groups[level].append((slice_id, order['parts'], priority))
 
         # For each level, sort by priority (desc) then left-to-right
@@ -89,12 +82,12 @@ class SegmentManager:
             self.finalized_segments.append(result)
             return result
 
+    async def flag_engine_done(self, engine_name):
+        """Flag engine as done."""
+        self.completion_flags[engine_name] = True
+        if all(self.completion_flags.values()):
+            await self._dropdown_assemble()
+
     def get_finalized(self):
         """Return finalized segments."""
         return self.finalized_segments
-
-    def all_complete(self):
-        """Check if all engines have completed their work."""
-        if not self.completion_flags:
-            return False
-        return all(self.completion_flags.values())

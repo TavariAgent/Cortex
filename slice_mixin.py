@@ -1,9 +1,29 @@
 from mpmath import mp
+import sympy as sp
+from sympy import symbols
+from sympy.core.function import AppliedUndef
 
 from slice_detector import build_slice_graph
-from priority_rules import precedence_of
+from priority_rules import precedence_of, PRIORITY
 from utils.trace_helpers import add_traceback
 
+
+# Unevaluated node types that normally require .doit() or further processing
+UNEVALUATED = (
+    sp.Derivative,
+    sp.Integral,
+    sp.Limit,
+    sp.Sum,
+    sp.Product,
+    sp.Subs,
+)
+
+PIECEWISE = sp.Piecewise
+
+x = symbols('x')
+g = sp.Function('g')(x)
+f = sp.Function('f')(x)
+x = sp.Symbol('x')
 
 class SliceMixin:
     """
@@ -18,6 +38,47 @@ class SliceMixin:
     # -------------------------------------------------------------- #
     def _add_traceback(self, step: str, info: str):
         add_traceback(self, step, info)
+
+    @staticmethod
+    def needs_more_work(expr: sp.Expr, *, require_numeric=False) -> bool:
+        """Return True if expr needs more work to compute.
+        - If require_numeric=True, also require the result to be a numeric value (no special functions left).
+        """
+        # 1) Any unevaluated calculus objects left?
+        if expr.has(*UNEVALUATED):
+            return True
+
+        # 2) Any undefined functions like f(x)?
+        if expr.has(AppliedUndef):
+            return True
+
+        # 3) Piecewise: mark dirty if any nontrivial conditions remain
+        if expr.has(PIECEWISE):
+            for pw in expr.atoms(PIECEWISE):
+                # If any condition (other than True) still contains symbols, we consider it dirty
+                if any((cond is not True) and cond.free_symbols for cond, _ in pw.args):
+                    return True
+            # If you want to treat any Piecewise as dirty regardless, uncomment:
+            # return True
+
+        # 4) Symbolic variables anywhere in the tree?
+        if expr.free_symbols:  # more inclusive than isinstance(expr, sp.Symbol)
+            return True
+
+        # 5) Numeric requirement: if you demand a concrete numeric value (not just exact expression)
+        if require_numeric:
+            # If it’s a pure number, it’s fine
+            if expr.is_Number:
+                return False
+            # SymPy numeric constants (pi, E, I) are NumberSymbols; treat as dirty if you need a float
+            if expr.is_NumberSymbol:
+                return True
+            # Special functions of numeric arguments, e.g., sin(1), erf(2) – treat as dirty
+            # if you want a float result rather than an exact form.
+            if not expr.free_symbols and expr.has(sp.Function):
+                return True
+
+        return False
 
     # ──────────────────────────────────────────────────────────────
     #  Generic part-ordering helper (PEMDAS, left-to-right)
@@ -44,11 +105,11 @@ class SliceMixin:
 
         def _precedence(part):
             """Return integer precedence; larger means tighter binding."""
-            # 1) explicit attr  .op  set by engine
+            # 1) explicit attr .op set by engine
             op = getattr(part, 'op', None)
             # 2) best-effort scan in the textual representation
             if op is None:
-                for sym in ('^', '*', '/', '+', '-'):
+                for sym in PRIORITY:
                     if sym in str(part):
                         op = sym
                         break

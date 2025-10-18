@@ -24,6 +24,7 @@ class StageTracer:
         else:
             print("No trace data")
 
+
 class Structure:
     """Class for determining the structure of the expression and returning a snapshot of all slices."""
 
@@ -40,26 +41,66 @@ class Structure:
         }
         self.flags.update({
             'packing': FlagBus.get('packing', False),
-            'last_pack_from': FlagBus.get('last_pack_from')
+            'engine_done': FlagBus.get('engine_done', False)
         })
 
-    async def _inform_structure(self):
-        # Simulate async flag updates
-        expression = "2 + 3 * 4"
-        slices = expression.split()
+    # Async to update structure flags
+    async def _inform_structure(self, expr):
+        slices = expr.split()
         slice_map = {i: slice for i, slice in enumerate(slices)}
         parts_per_slice = {slice: len(slice) for slice in slices}
-        # Update flags
-        if '+' in expression:
+        # Arithmetic
+        if '+' in expr:
             self.flags['addition'] = True
-        if '*' in expression:
+        if '*' in expr:
             self.flags['multiplication'] = True
+        if '-' in expr:
+            self.flags['subtraction'] = True
+        if '/' in expr:
+            self.flags['division'] = True
+        if '^' in expr:
+            self.flags['exponentiation'] = True
+        # Calculus
+        if 'derivative(' in expr:
+            self.flags['derivative'] = True
+        if 'diff(' in expr:
+            self.flags['derivative'] = True
+        # Elementary
+        if 'abs(' in expr:
+            self.flags['absolute'] = True
+        if 'log(' in expr:
+            self.flags['logarithm'] = True
+        if 'ln(' in expr:
+            self.flags['natural_log'] = True
+        if 'log10(' in expr:
+            self.flags['logarithm_10'] = True
+        if 'log2(' in expr:
+            self.flags['logarithm_2'] = True
+        if 'sqrt(' in expr:
+            self.flags['square_root'] = True
+        if 'exp(' in expr:
+            self.flags['exponential'] = True
+        # Trigonometry
+        if 'sin(' in expr:
+            self.flags['sine'] = True
+        if 'cos(' in expr:
+            self.flags['cosine'] = True
+        if 'tan(' in expr:
+            self.flags['tangent'] = True
+        if 'asin(' in expr:
+            self.flags['arc_sine'] = True
+        if 'acos(' in expr:
+            self.flags['arc_cosine'] = True
+        if 'atan(' in expr:
+            self.flags['arc_tangent'] = True
+
         snapshot = {
             'interval_slice_map': slice_map,
             'parts_per_slice': parts_per_slice,
             'flags': self.flags.copy()
         }
         return snapshot
+
 
 class EngineWorker:
     """Worker class for running engines in async context."""
@@ -87,6 +128,7 @@ class EngineWorker:
             return result
         return None
 
+
 class ThreadedEngineManager:
     """Manages threaded execution of engines."""
 
@@ -105,87 +147,75 @@ class ThreadedEngineManager:
             task = asyncio.create_task(worker.run(tasks.get(name, {})))
             self.tasks.append(task)
         await asyncio.gather(*self.tasks)
-        # Set engines_done flag
-        # self.structure.flags['engines_done'] = True  # Link to Structure
+
 
 class XorStringCompiler:
-    """Class for compiling XOR strings and their XOR operations as well as integer packing"""
-
     def __init__(self):
-        self.byte_strings = []
-        self.packed_integers = []
-        self.segment_pools = defaultdict(dict)  # XOR-created dict pools: engine_name -> {segment_id: byte_segment}
-        self.flag_pool = {}  # Pool for flags
+        self.byte_strings: list[bytes] = []
+        self.packed_integers: list[bytearray] = []
+        self.segment_pools: dict[str, dict[str, bytes]] = defaultdict(dict)
+        self.flag_pool: dict[str, bool] = {}
 
-    def __str__(self):
-        """Formalize objects to byte strings. Dual role: initial conversion after expression detection, final return."""
-        formalized = []
-        for obj in self.byte_strings:
-            if isinstance(obj, str):
-                formalized.append(obj.encode('utf-8'))
-            elif isinstance(obj, int):
-                formalized.append(str(obj).encode('utf-8'))
-            else:
-                formalized.append(bytes(obj))
-        xor_result = self._compute_xor(formalized)
-        packed = self._pack_integers(xor_result)
-        return packed.decode('utf-8', errors='ignore')
+    def finalize_pack(self) -> bytes:
+        """Pack byte_strings into one final artifact (example: concatenate)."""
+        return b"".join(self.byte_strings)
+
+    def __str__(self) -> str:
+        # Return a textual summary
+        return f"XorStringCompiler(byte_strings={len(self.byte_strings)}, segments={sum(len(p) for p in self.segment_pools.values())})"
 
     def __xor__(self, other):
-        """Create XOR dict pools for engines and flags."""
-        xor_dirs = [{'op': 'xor', 'targets': self.byte_strings}]
-        self.flag_pool = {'xor_active': True, 'engines_done': False}
-        # Create pools for each engine (stub: assume engine names)
-        for engine_name in ['basic', 'trig', 'complex']:
-            self.segment_pools[engine_name] = {}
-        return xor_dirs
+        # Establish XOR operation metadata; example placeholder
+        self.flag_pool.update({'xor_active': True, 'engines_done': False})
+        return [{'op': 'xor', 'count': len(self.byte_strings)}]
 
     def __add__(self, other):
-        """Overload __add__ with mid-step: Add segment byte strings to dict pools, update flags."""
-        # Get segments from other (e.g., from engines)
+        # Expect other to expose segments
         segments = getattr(other, 'segments', [])
         for seg in segments:
-            engine_name = seg.get('engine', 'basic')  # Assume segment has engine metadata
-            seg_id = seg.get('id', 'default')
+            engine_name = seg.get('engine', 'basic')  # single default only
+            seg_id = seg.get('id')
             byte_seg = seg.get('bytes', b'')
-            # Add to pool dict
+            if seg_id is None:
+                continue
             self.segment_pools[engine_name][seg_id] = byte_seg
-            # Update flags async (simulate)
-            asyncio.create_task(self._update_flags_async())
-        # Return self for chaining or metadata
-        return {'segments_added': len(segments), 'pools': dict(self.segment_pools)}
+        return {'segments_added': len(segments)}
 
-    async def _update_flags_async(self):
-        """Async update flags during __add__."""
-        await asyncio.sleep(0.01)
-        self.flag_pool['addition'] = True  # Example
-
-    async def _compute_xor(self, byte_strings=None):
-        if byte_strings is None:
-            byte_strings = self.byte_strings
-        result = []
-        for bs in byte_strings:
-            xor_bs = bytes(b ^ 0xAA for b in bs)
-            result.append(xor_bs)
-        return result
-
-    def _pack_integers(self, results):
+    def _pack_integers(self, results: list[bytes]) -> bytearray:
         packed = bytearray()
         for result in results:
             try:
                 num = int(result.decode('utf-8'))
-                packed.extend(num.to_bytes((num.bit_length() + 7) // 8, 'big'))
-            except ValueError:
-                packed.extend(result)
+                packed.extend(num.to_bytes((num.bit_length() + 7) // 8 or 1, 'little'))
+            except (ValueError, AttributeError):
+                packed.extend(result if isinstance(result, (bytes, bytearray)) else bytes(result))
         self.packed_integers.append(packed)
         return packed
 
-class Compute:
-    """Class for executing the final byte string compilation and execution."""
 
-    def __init__(self, compiler, manager):
+class ComputedResultAsync:
+    def __init__(self, compiler, engines_done_event: asyncio.Event):
         self.compiler = compiler
-        self.manager = manager
+        self._engines_done = engines_done_event
+
+    async def wait_and_compile(self, expr: str = '') -> str:
+        # await without polling/sleeping
+        await self._engines_done.wait()
+        result = self.compile_results(expr)
+        return result or expr
+
+    def compile_results(self, expr: str = '') -> str | None:
+        # same logic as the sync version above
+        if not self.compiler.flag_pool.get('engine_done', False):
+            return None
+        assembled_any = False
+        for engine_name, pool in self.compiler.segment_pools.items():
+            for seg_id, byte_seg in pool.items():
+                self.compiler.byte_strings.append(
+                    byte_seg if isinstance(byte_seg, (bytes, bytearray)) else str(byte_seg).encode('utf-8')
+                )
+                assembled_any = True
+        return expr if assembled_any else None
 
 
 class Diagnostic:
@@ -198,13 +228,12 @@ class Diagnostic:
         self.errors.append(msg)
         print(f"Error: {msg}")
 
+
 if __name__ == '__main__':
-    # Example setup
-    tracer = StageTracer()
     struct = Structure()
     compiler = XorStringCompiler()
     manager = ThreadedEngineManager()
-    compute = Compute(compiler, manager)
+    compute = ComputedResultAsync()
     diag = Diagnostic()
 
     # Add engines to manager

@@ -2,6 +2,11 @@ from abc import ABC, abstractmethod
 import asyncio
 from mpmath import mp
 import sympy as sp
+from sympy.parsing.sympy_parser import (
+    parse_expr,
+    standard_transformations,
+    implicit_multiplication_application,
+)
 
 from packing_utils import convert_and_pack
 from precision_manager import get_dps
@@ -64,7 +69,19 @@ class CalculusEngine(SliceMixin, MathEngine):
     def __init__(self, segment_manager):
         super().__init__(segment_manager)
         self.traceback_info = []
-        self._value = "x"  # Default symbolic var
+        # Common symbols you want to allow; extend as needed
+        self._symbols = sp.symbols('x y z t n')
+        self._locals = {
+            # Variables
+            'x': self._symbols[0], 'y': self._symbols[1], 'z': self._symbols[2], 't': self._symbols[3], 'n': self._symbols[4],
+            # Functions you allow
+            'sin': sp.sin, 'cos': sp.cos, 'tan': sp.tan,
+            'exp': sp.exp, 'log': sp.log, 'sqrt': sp.sqrt,
+            # Derivative entry points
+            'diff': sp.diff, 'Derivative': sp.Derivative,
+        }
+        self._locals.update({'f': sp.Function('f'), 'g': sp.Function('g')})
+        self._transformations = standard_transformations + (implicit_multiplication_application,)
 
     def _add_traceback(self, step, info):
         """Add step-wise traceback for debugging."""
@@ -79,6 +96,9 @@ class CalculusEngine(SliceMixin, MathEngine):
             'info': info,
             'timestamp': timestamp
         })
+
+    def _parse_expr(self, s: str):
+        return parse_expr(s, local_dict=self._locals, transformations=self._transformations)
 
     async def _compute_single_part(self, part):
         """Stub: Compute single part, respecting priorities."""
@@ -102,37 +122,50 @@ class CalculusEngine(SliceMixin, MathEngine):
         return final_results
 
     def compute(self, expr: str):
-        """Compute a calculus-level expression and return NUMERIC text."""
+        """Compute a calculus-level expression and return a string result."""
         self._add_traceback('compute_start', expr)
 
-        # 1. Parse; force evaluation of derivative/integral/limit
-        expr_sym = sp.sympify(expr,
-                              locals={
-                                  'derivative': sp.diff,
-                                  'diff'      : sp.diff,
-                                  'integral'  : sp.integrate,
-                                  'integrate' : sp.integrate,
-                                  'limit'     : sp.limit,
-                              },
-                              evaluate=True)
+        if not isinstance(expr, str):
+            self._add_traceback('type_error', f'Expected str, got {type(expr)}')
+            return 'Error: expression must be a string'
 
-        # 2. Resolve any remaining Derivative / Integral / Limit nodes
-        expr_sym = expr_sym.doit().evalf(mp.dps)
-
-        # 3. If the result is still symbolic try numerical eval
         try:
-            num_val = expr_sym.evalf(mp.dps)       # type: ignore[attr-defined]
-            result  = mp.mpf(str(num_val))
-        except (TypeError, ValueError):
-            # still symbolic ⇒ hand the unevaluated string upward
-            result = expr_sym
+            # Normalize: allow both derivative(…) and diff(…)
+            normalized = expr.strip()
+            if normalized.startswith('derivative('):
+                # Replace outer-most name only; safer than blind replace
+                normalized = 'diff' + normalized[len('derivative'):]
 
-        # 4. Pack & return
-        packed = str(result).encode()
-        self._cache.append(packed)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed)
-        self._add_traceback('compute_end', f'{expr_sym} -> {result}')
-        return str(result)
+            # Parse to a SymPy object
+            sym = self._parse_expr(normalized)
+
+            # If the parse yields a Derivative node, evaluate it; if it's already a concrete expr, keep it
+            if isinstance(sym, sp.Derivative):
+                res = sym.doit()
+            else:
+                # If someone wrote diff(sin(x), x), parse_expr often returns the evaluated result already.
+                # But to be safe, try doit() if available
+                res = getattr(sym, 'doit', lambda: sym)()
+
+            # Optional: simplify
+            res = sp.simplify(res)
+            result_str = str(res)
+
+            # Notify segment manager and update cache consistently
+            self.segment_manager.receive_part_order(
+                self.__class__.__name__,
+                'result',
+                [{'part': 'result', 'result': result_str}],
+            )
+            # If your cache is meant to store bytes, encode here; otherwise, keep it as str
+            self._cache.append(result_str.encode('utf-8'))
+            self._add_traceback('derivative_ok', result_str)
+            return result_str
+
+        except Exception as e:
+            msg = f'Error: {e.__class__.__name__}: {e}'
+            self._add_traceback('sympy_fail', msg)
+            return msg
 
 
     def __sub__(self, other):

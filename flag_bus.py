@@ -9,7 +9,6 @@ Any module can do:
 A tiny layer around a module-level dict keeps things threadsafe and
 gives us optional asyncio-wait helpers for “gated logic”.
 """
-import asyncio
 from typing import Any, Dict
 
 class _FlagBusImpl:
@@ -28,12 +27,6 @@ class _FlagBusImpl:
     def set(cls, key: str, value: Any) -> None:
         cls._flags[key] = value
 
-    # ––– async helper: wait until a flag is truthy –––
-    @classmethod
-    async def wait_for(cls, key: str, poll: float = 0.01) -> Any:
-        while not cls.get(key):
-            await asyncio.sleep(poll)
-        return cls.get(key)
 
 # public alias
 FlagBus = _FlagBusImpl

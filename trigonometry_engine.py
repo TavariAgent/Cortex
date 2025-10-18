@@ -231,6 +231,36 @@ class TrigonometryEngine(SliceMixin, MathEngine):
                 raise ValueError(f"Invalid argument: {arg_str}")
             arg = self.snap_to_angle(arg)
             result = mp.tan(arg)
+        elif 'asin(' in expr:
+            arg_str = expr.split('asin(')[1].rstrip(')')
+            try:
+                sym_expr = sp.sympify(arg_str)
+                num      = sym_expr.evalf(mp.dps)
+                arg      = mp.mpf(str(num))
+            except Exception:
+                raise ValueError(f"Invalid argument: {arg_str}")
+            arg = self.snap_to_angle(arg)
+            result = mp.asin(arg)
+        elif 'acos(' in expr:
+            arg_str = expr.split('acos(')[1].rstrip(')')
+            try:
+                sym_expr = sp.sympify(arg_str)
+                num      = sym_expr.evalf(mp.dps)
+                arg      = mp.mpf(str(num))
+            except Exception:
+                raise ValueError(f"Invalid argument: {arg_str}")
+            arg = self.snap_to_angle(arg)
+            result = mp.acos(arg)
+        elif 'atan(' in expr:
+            arg_str = expr.split('atan(')[1].rstrip(')')
+            try:
+                sym_expr = sp.sympify(arg_str)
+                num      = sym_expr.evalf(mp.dps)
+                arg      = mp.mpf(str(num))
+            except Exception:
+                raise ValueError(f"Invalid argument: {arg_str}")
+            arg = self.snap_to_angle(arg)
+            result = mp.atan(arg)
         else:
             raise ValueError(f"Unsupported trig expression: {expr}")
 
