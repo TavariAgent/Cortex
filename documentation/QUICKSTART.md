@@ -68,9 +68,6 @@ computation: Result: 5.0
 ```bash
 # Basic functionality tests
 python test_basic_arithmetic.py
-
-# Integration tests
-python test_integration.py
 ```
 
 ## Key Features

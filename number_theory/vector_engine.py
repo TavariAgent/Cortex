@@ -1,7 +1,7 @@
 from mpmath import mp
 from slice_mixin import SliceMixin
-from packing_utils import convert_and_pack
-from precision_manager import get_dps
+from packing import convert_and_pack
+from utils.precision_manager import get_dps
 from abc import ABC, abstractmethod
 
 mp.dps = get_dps()

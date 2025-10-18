@@ -26,7 +26,7 @@ from typing import List, Dict, Tuple
 
 # Optional integrations -------------------------------------------------
 try:
-    from packing_utils import convert_and_pack
+    from packing import convert_and_pack
 except ModuleNotFoundError:          # running stand-alone tests
     convert_and_pack = lambda x, **k: b''
 

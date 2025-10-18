@@ -2,8 +2,8 @@ from abc import ABC, abstractmethod
 import asyncio
 from mpmath import mp
 
-from packing_utils import convert_and_pack
-from precision_manager import get_dps
+from packing import convert_and_pack
+from utils.precision_manager import get_dps
 from slice_mixin import SliceMixin
 from xor_string_compiler import XorStringCompiler
 

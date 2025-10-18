@@ -1,4 +1,3 @@
-import asyncio
 from abc import ABC, abstractmethod
 from typing import List
 
@@ -6,8 +5,8 @@ from mpmath import mp
 import sympy as sp
 
 from slice_mixin import SliceMixin
-from packing_utils import convert_and_pack
-from precision_manager import get_dps
+from packing import convert_and_pack
+from utils.precision_manager import get_dps
 from utils.trace_helpers import add_traceback
 from segment_manager import SegmentManager
 from xor_string_compiler import XorStringCompiler
