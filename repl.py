@@ -13,13 +13,13 @@ from complex_algebra_engine import ComplexAlgebraEngine
 from precision_manager import presets, get_dps, set_dps
 from trigonometry_engine import TrigonometryEngine
 from part_inspector import compute as inspect_compute
+from xor_string_compiler import XorStringCompiler  # Add this import
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from abc_engines import BasicArithmeticEngine
-from segment_manager import SegmentManager
-from main import Structure
+from segment_manager import SegmentManager, Structure
 
 
 def main():
@@ -37,7 +37,9 @@ def main():
     struct = Structure()
     segment_mgr = SegmentManager(struct)
     engine = BasicArithmeticEngine(segment_mgr)
+    xor_compiler = XorStringCompiler()  # Initialize XOR compiler
     show_trace = False
+    auto_inject_threshold = 1000  # Auto-inject constants when precision >= 1000
 
     while True:
         try:
@@ -52,7 +54,10 @@ def main():
             if user_input.lower().startswith(('precision', 'p')):
                 parts = user_input.split()
                 if len(parts) == 1:
-                    print(f"Current precision: {get_dps()} dps")
+                    current_dps = get_dps()
+                    print(f"Current precision: {current_dps} dps")
+                    if current_dps >= auto_inject_threshold:
+                        print(f"  (High-precision constant injection: ACTIVE)")
                 elif len(parts) == 2:
                     try:
                         new_dps = int(parts[1])
@@ -63,6 +68,9 @@ def main():
                         engine = TrigonometryEngine(segment_mgr)
                         engine = ComplexAlgebraEngine(segment_mgr)
                         print(f"Precision set to {new_dps} dps")
+                        if new_dps >= auto_inject_threshold:
+                            print(
+                                f"  High-precision constant injection enabled (up to {min(new_dps, 100000)} decimals)")
                     except Exception as e:
                         print(f"Error: {e}")
                 else:
@@ -74,8 +82,29 @@ def main():
                 print(f"Traceback display: {'ON' if show_trace else 'OFF'}")
                 continue
 
+            # Process expression - apply XOR injection in high-precision mode
+            expression = user_input
+            current_precision = get_dps()
+
+            if current_precision >= auto_inject_threshold:
+                # Apply XOR operator for constant injection
+                try:
+                    # Set the XOR compiler to use current precision (capped at 100k)
+                    effective_precision = min(current_precision, 100000)
+                    xor_result = xor_compiler ^ expression
+
+                    if xor_result.get('constants_injected'):
+                        expression = xor_result['modified_expr']
+                        if show_trace:
+                            print(f"  Constants injected at {effective_precision} decimal precision")
+                            for const in xor_result.get('detected_constants', []):
+                                print(f"    - {const}")
+                except Exception as e:
+                    if show_trace:
+                        print(f"  Constant injection skipped: {e}")
+
             # Compute expression via call_helper (routes to appropriate engine)
-            result = asyncio.run(inspect_compute(user_input))
+            result = asyncio.run(inspect_compute(expression))
             print(f"Result: {result}")
 
             if show_trace:

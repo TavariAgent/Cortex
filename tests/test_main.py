@@ -1,5 +1,5 @@
 import asyncio
-from main import Structure, XorStringCompiler, Compute, Diagnostic
+from main import Structure, Diagnostic
 from abc_engines import BasicArithmeticEngine
 from segment_manager import SegmentManager
 

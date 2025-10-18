@@ -31,8 +31,7 @@ except ModuleNotFoundError:          # running stand-alone tests
     convert_and_pack = lambda x, **k: b''
 
 try:
-    from segment_manager import SegmentManager
-    from main import Structure
+    from segment_manager import SegmentManager, Structure
 except ModuleNotFoundError:
     SegmentManager = None            # type: ignore[assignment]
     Structure = None                 # type: ignore[assignment]

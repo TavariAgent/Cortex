@@ -122,23 +122,53 @@ class SliceMixin:
 
     @staticmethod
     def _linear_tokenize(flat_expr: str):
-        """Simple left-to-right tokenizer for numbers and operators (no parens)."""
+        """Simple left-to-right tokenizer for numbers, operators, and constants (no parens)."""
         out, cur = [], ''
-        for ch in flat_expr:
-            if ch.isdigit() or ch == '.':
+        i = 0
+        while i < len(flat_expr):
+            ch = flat_expr[i]
+
+            # Handle multi-character constants like 'pi' and scientific notation
+            if ch == 'e' and i + 1 < len(flat_expr) and (flat_expr[i + 1] == '+' or flat_expr[i + 1] == '-'):
+                # Scientific notation like 1e+10
+                if cur:
+                    cur += ch
+                    i += 1
+                    continue
+            elif ch == 'e' and (i == 0 or flat_expr[i - 1] in '+-*/^( '):
+                # Euler's number as a standalone constant
+                if cur:
+                    out.append(cur)
+                    cur = ''
+                out.append('e')
+            elif ch == 'p' and i + 1 < len(flat_expr) and flat_expr[i + 1] == 'i':
+                # Handle 'pi' constant
+                if cur:
+                    out.append(cur)
+                    cur = ''
+                out.append('pi')
+                i += 1  # Skip the 'i'
+            elif ch.isdigit() or ch == '.':
                 cur += ch
             elif ch in '+-*/^':
                 if cur:
-                    out.append(cur); cur = ''
+                    out.append(cur)
+                    cur = ''
                 out.append(ch)
-            elif ch == ' ':
-                continue
-            elif ch == ',':
-                # Comma separates function arguments; we ignore it for
-                # pure arithmetic tokenising.
+            elif ch in ' ,':
+                # Skip spaces and commas
+                if cur:
+                    out.append(cur)
+                    cur = ''
+            elif ch in '()':
+                # Skip parentheses for this simple tokenizer
                 continue
             else:
-                raise ValueError(f'Unexpected char {ch}')
+                # For anything else, accumulate as part of identifier
+                cur += ch
+
+            i += 1
+
         if cur:
             out.append(cur)
         return out
@@ -147,24 +177,47 @@ class SliceMixin:
     # SliceMixin atom evaluator (needed but rarely used here)
     # -------------------------------------------------------------- #
     def _evaluate_atom(self, slice_text: str):
-        # Defer to BasicArithmeticEngine style evaluation if someone
-        # sends an arithmetic slice to us.
+        """Evaluate atomic expressions including constants."""
         tokens = self._linear_tokenize(slice_text)
-        for op_level in [4, 3, 2]:
+
+        # Replace constants with their numeric values
+        for i, token in enumerate(tokens):
+            if token == 'e':
+                tokens[i] = str(mp.e)
+            elif token == 'pi':
+                tokens[i] = str(mp.pi)
+            elif token == 'E':  # Support both cases
+                tokens[i] = str(mp.e)
+
+        # Process operators by precedence
+        for op_level in [4, 3, 2, 1]:  # Added level 1 for addition/subtraction
             i = 0
             while i < len(tokens):
-                if precedence_of(tokens[i]) == op_level:
-                    a = mp.mpf(tokens[i - 1]); b = mp.mpf(tokens[i + 1])
-                    val = (mp.power if tokens[i] == '^'
-                           else a.__mul__ if tokens[i] == '*'
-                           else a.__truediv__ if tokens[i] == '/'
-                           else a.__add__ if tokens[i] == '+'
-                           else a.__sub__)(b)
+                if i > 0 and i < len(tokens) - 1 and precedence_of(tokens[i]) == op_level:
+                    a = mp.mpf(tokens[i - 1])
+                    b = mp.mpf(tokens[i + 1])
+
+                    if tokens[i] == '^':
+                        val = mp.power(a, b)
+                    elif tokens[i] == '*':
+                        val = a * b
+                    elif tokens[i] == '/':
+                        val = a / b
+                    elif tokens[i] == '+':
+                        val = a + b
+                    elif tokens[i] == '-':
+                        val = a - b
+                    else:
+                        i += 1
+                        continue
+
                     tokens = tokens[:i - 1] + [str(val)] + tokens[i + 2:]
                 else:
                     i += 1
+
         if len(tokens) != 1:
             raise ValueError(f'Could not resolve slice {tokens}')
+
         return mp.mpf(tokens[0])
 
     def _compute_slice_parallel(self, expr: str):

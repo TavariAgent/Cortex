@@ -76,7 +76,7 @@ class SegmentManager:
         # Finalize to main's __add__ when all parts are ready
         if assembled:
             # Late import to avoid circular dependency
-            from main import XorStringCompiler
+            from xor_string_compiler import XorStringCompiler
             compiler = XorStringCompiler()
             result = compiler + type('AssembledData', (), {'segments': list(assembled.values())})()
             self.finalized_segments.append(result)
@@ -91,3 +91,82 @@ class SegmentManager:
     def get_finalized(self):
         """Return finalized segments."""
         return self.finalized_segments
+
+
+class Structure:
+    """Class for determining the structure of the expression and returning a snapshot of all slices."""
+
+    def __init__(self):
+        self.flags = {}
+        self._initialize_flags()
+
+    def _initialize_flags(self):
+        self.flags = {
+            'addition': False,
+            'multiplication': False,
+            'xor_op': True,
+            'engines_done': False, #Flag for engine completion
+        }
+        self.flags.update({
+            'packing': FlagBus.get('packing', False),
+            'engine_done': FlagBus.get('engine_done', False)
+        })
+
+    # Async to update structure flags
+    async def _inform_structure(self, expr):
+        slices = expr.split()
+        slice_map = {i: slice for i, slice in enumerate(slices)}
+        parts_per_slice = {slice: len(slice) for slice in slices}
+        # Arithmetic
+        if '+' in expr:
+            self.flags['addition'] = True
+        if '*' in expr:
+            self.flags['multiplication'] = True
+        if '-' in expr:
+            self.flags['subtraction'] = True
+        if '/' in expr:
+            self.flags['division'] = True
+        if '^' in expr:
+            self.flags['exponentiation'] = True
+        # Calculus
+        if 'derivative(' in expr:
+            self.flags['derivative'] = True
+        if 'diff(' in expr:
+            self.flags['derivative'] = True
+        # Elementary
+        if 'abs(' in expr:
+            self.flags['absolute'] = True
+        if 'log(' in expr:
+            self.flags['logarithm'] = True
+        if 'ln(' in expr:
+            self.flags['natural_log'] = True
+        if 'log10(' in expr:
+            self.flags['logarithm_10'] = True
+        if 'log2(' in expr:
+            self.flags['logarithm_2'] = True
+        if 'sqrt(' in expr:
+            self.flags['square_root'] = True
+        if 'exp(' in expr:
+            self.flags['exponential'] = True
+        # Trigonometry
+        if 'sin(' in expr:
+            self.flags['sine'] = True
+        if 'cos(' in expr:
+            self.flags['cosine'] = True
+        if 'tan(' in expr:
+            self.flags['tangent'] = True
+        if 'asin(' in expr:
+            self.flags['arc_sine'] = True
+        if 'acos(' in expr:
+            self.flags['arc_cosine'] = True
+        if 'atan(' in expr:
+            self.flags['arc_tangent'] = True
+
+        snapshot = {
+            'interval_slice_map': slice_map,
+            'parts_per_slice': parts_per_slice,
+            'flags': self.flags.copy()
+        }
+        return snapshot
+
+

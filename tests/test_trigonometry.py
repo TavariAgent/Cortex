@@ -9,20 +9,11 @@ import os
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from trigonometry_engine import TrigonometryEngine
-from segment_manager import SegmentManager
-from main import Structure
-
-
 def test_trigonometry():
     """Test TrigonometryEngine with sin, cos functions."""
     print("=" * 60)
     print("Testing TrigonometryEngine")
     print("=" * 60)
-
-    struct = Structure()
-    segment_mgr = SegmentManager(struct)
-    engine = TrigonometryEngine(segment_mgr)
 
     # Test sin
     result_sin = engine.compute('sin(pi/2)')

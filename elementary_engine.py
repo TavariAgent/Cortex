@@ -1,4 +1,5 @@
 import asyncio
+from abc import ABC, abstractmethod
 from typing import List
 
 from mpmath import mp
@@ -9,10 +10,62 @@ from packing_utils import convert_and_pack
 from precision_manager import get_dps
 from utils.trace_helpers import add_traceback
 from segment_manager import SegmentManager
+from xor_string_compiler import XorStringCompiler
 
 mp.dps = get_dps()
 
-class ElementaryEngine(SliceMixin):
+
+class MathEngine(ABC):
+    """Abstract base class for all math engines. Enables parallel computation with priority-flow helpers."""
+
+    def __init__(self, segment_manager, enable_injection=None):
+        self.segment_manager = segment_manager
+        self.parallel_tasks = []
+        self._cache = []  # Cache for packed bytes before sending to segment_manager
+
+        # Handle injection setup
+        if enable_injection is None:
+            enable_injection = get_dps() >= 1000
+
+        self.enable_injection = enable_injection
+
+        if enable_injection:
+            self.xor_compiler = XorStringCompiler()
+        else:
+            self.xor_compiler = None
+
+    @abstractmethod
+    def compute(self, expr):
+        """Parallel compute method: Calculate all available parts simultaneously, respecting primary level."""
+        pass
+
+    @staticmethod
+    async def _compute_single_part(part):
+        """Stub: Compute single part, respecting priorities."""
+        if 'nest' in str(part):
+            return f"nested_{part}"
+        return part * 2
+
+
+    def __add__(self, other):
+        """Overload __add__: Send part orders to segment manager per-slice."""
+        # Stub: Generate part orders based on engine logic
+        part_order = [{'part': 'example', 'bytes': b'data'}]  # Mock
+        slice_data = 'slice_1'  # From expression parsing
+        self.segment_manager.receive_part_order(self.__class__.__name__, slice_data, part_order)
+        return self  # Or metadata
+
+    @staticmethod
+    def _normalise_small(x, *, eps=None):
+        eps = eps or mp.mpf(10) ** (-mp.dps + 2)  # ~100 ulps
+        return mp.mpf(0) if mp.fabs(x) < eps else x
+
+    @staticmethod
+    def _convert_and_pack(parts, *, twos_complement=False):
+        return convert_and_pack(parts, twos_complement=twos_complement)
+
+
+class ElementaryEngine(SliceMixin, MathEngine):
     """
     Elementary functions: exp, log, log10, log2, log1p, sqrt.
     """

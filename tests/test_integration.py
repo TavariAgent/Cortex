@@ -10,7 +10,7 @@ import os
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from main import Structure, XorStringCompiler, EngineWorker
+from main import Structure, EngineWorker
 from abc_engines import BasicArithmeticEngine
 from segment_manager import SegmentManager
 

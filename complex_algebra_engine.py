@@ -5,38 +5,41 @@ from mpmath import mp
 from packing_utils import convert_and_pack
 from precision_manager import get_dps
 from slice_mixin import SliceMixin
+from xor_string_compiler import XorStringCompiler
 
 mp.dps = get_dps()
 
 class MathEngine(ABC):
     """Abstract base class for all math engines. Enables parallel computation with priority-flow helpers."""
 
-    def __init__(self, segment_manager):
+    def __init__(self, segment_manager, enable_injection=None):
         self.segment_manager = segment_manager
         self.parallel_tasks = []
         self._cache = []  # Cache for packed bytes before sending to segment_manager
+
+        # Handle injection setup
+        if enable_injection is None:
+            enable_injection = get_dps() >= 1000
+
+        self.enable_injection = enable_injection
+
+        if enable_injection:
+            self.xor_compiler = XorStringCompiler()
+        else:
+            self.xor_compiler = None
 
     @abstractmethod
     def compute(self, expr):
         """Parallel compute method: Calculate all available parts simultaneously, respecting primary level."""
         pass
 
-    # Stub dunder methods for math ops (except __add__ which is handled by segment_manager)
-    @abstractmethod
-    def __sub__(self, other):
-        pass
+    @staticmethod
+    async def _compute_single_part(part):
+        """Stub: Compute single part, respecting priorities."""
+        if 'nest' in str(part):
+            return f"nested_{part}"
+        return part * 2
 
-    @abstractmethod
-    def __mul__(self, other):
-        pass
-
-    @abstractmethod
-    def __div__(self, other):
-        pass
-
-    @abstractmethod
-    def __pow__(self, other):
-        pass
 
     def __add__(self, other):
         """Overload __add__: Send part orders to segment manager per-slice."""

@@ -110,8 +110,7 @@ class PartInspector:
 
 # Async wrapper for REPL convenience
 async def compute(expr):
-    from segment_manager import SegmentManager
-    from main import Structure
+    from segment_manager import SegmentManager, Structure
     seg_mgr = SegmentManager(Structure())
     ins = PartInspector(seg_mgr)
     return await ins.evaluate(expr)

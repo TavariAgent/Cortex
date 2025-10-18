@@ -12,34 +12,50 @@ from packing_utils import convert_and_pack
 from precision_manager import get_dps
 from priority_rules import precedence_of
 from slice_mixin import SliceMixin
+from xor_string_compiler import XorStringCompiler
 
 mp.dps = get_dps()
+
 
 class MathEngine(ABC):
     """Abstract base class for all math engines. Enables parallel computation with priority-flow helpers."""
 
-    def __init__(self, segment_manager):
+    def __init__(self, segment_manager, enable_injection=None):
         self.segment_manager = segment_manager
         self.parallel_tasks = []
         self._cache = []  # Cache for packed bytes before sending to segment_manager
-        # Set high precision
 
-    # Stub dunder methods for math ops (except __add__ which is handled by segment_manager)
-    @abstractmethod
-    def __sub__(self, other):
-        pass
+        # Handle injection setup
+        if enable_injection is None:
+            enable_injection = get_dps() >= 1000
 
-    @abstractmethod
-    def __mul__(self, other):
-        pass
+        self.enable_injection = enable_injection
 
-    @abstractmethod
-    def __div__(self, other):
-        pass
+        if enable_injection:
+            self.xor_compiler = XorStringCompiler()
+        else:
+            self.xor_compiler = None
 
     @abstractmethod
-    def __pow__(self, other):
+    def compute(self, expr):
+        """Parallel compute method: Calculate all available parts simultaneously, respecting primary level."""
         pass
+
+    @staticmethod
+    async def _compute_single_part(part):
+        """Stub: Compute single part, respecting priorities."""
+        if 'nest' in str(part):
+            return f"nested_{part}"
+        return part * 2
+
+
+    def __add__(self, other):
+        """Overload __add__: Send part orders to segment manager per-slice."""
+        # Stub: Generate part orders based on engine logic
+        part_order = [{'part': 'example', 'bytes': b'data'}]  # Mock
+        slice_data = 'slice_1'  # From expression parsing
+        self.segment_manager.receive_part_order(self.__class__.__name__, slice_data, part_order)
+        return self  # Or metadata
 
     @staticmethod
     def _normalise_small(x, *, eps=None):
@@ -49,7 +65,6 @@ class MathEngine(ABC):
     @staticmethod
     def _convert_and_pack(parts, *, twos_complement=False):
         return convert_and_pack(parts, twos_complement=twos_complement)
-
 
 class BasicArithmeticEngine(SliceMixin, MathEngine):
     """Handles basic arithmetic: sub, mul, div, pow. Uses built-in math where possible, falls back to Decimal/mpmath."""

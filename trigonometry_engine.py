@@ -6,71 +6,29 @@ import sympy as sp
 from packing_utils import convert_and_pack
 from precision_manager import get_dps
 from slice_mixin import SliceMixin
+from xor_string_compiler import XorStringCompiler
 
 mp.dps = get_dps()
 
-# Helper to build the exact-angle lookup table
-
-def _build_angle_table():
-    table = {}
-    dens = [1, 2, 3, 4, 5, 6, 8, 10, 12]
-    for d in dens:
-        for n in range(0, 2*d + 1):  # cover 0 .. 2 inclusive
-            r = sp.Rational(n, d)
-            key = sp.Rational(0, 1) if r == 2 else r
-            if key in table:
-                continue
-            angle = sp.pi * r
-            s = sp.simplify(sp.sin(angle))
-            c = sp.simplify(sp.cos(angle))
-            t = sp.simplify(sp.tan(angle))
-            if t is sp.zoo:
-                t = sp.oo  # unify representation
-            table[key] = {'sin': s, 'cos': c, 'tan': t}
-    return table
 
 class MathEngine(ABC):
     """Abstract base class for all math engines. Enables parallel computation with priority-flow helpers."""
 
-    def __init__(self, segment_manager):
+    def __init__(self, segment_manager, enable_injection=None):
         self.segment_manager = segment_manager
         self.parallel_tasks = []
         self._cache = []  # Cache for packed bytes before sending to segment_manager
 
-    # ──────────────────────────────────────────────────────────────────
-    #  Exact-angle lookup
-    # ──────────────────────────────────────────────────────────────────
-    # Build an exact-angle lookup for multiples of pi with improved readability
-    # and broader coverage. See module-level _build_angle_table().
-    _ANGLE_TABLE = _build_angle_table()
+        # Handle injection setup
+        if enable_injection is None:
+            enable_injection = get_dps() >= 1000
 
-    @classmethod
-    def _lookup_exact(cls, arg_mpf):
-        """
-        Try to convert arg (mp.mpf) into a SymPy Rational multiple of π.
-        If found in table, return (True, sin_val, cos_val, tan_val),
-        else (False, None, None, None).
-        """
-        # Convert mp.mpf -> SymPy rational multiple of pi
-        try:
-            ratio = sp.nsimplify(mp.mpf(arg_mpf) / mp.pi)
-        except Exception:
-            return False, None, None, None
+        self.enable_injection = enable_injection
 
-        # Must be a rational multiple to match table
-        if not isinstance(ratio, sp.Rational):
-            return False, None, None, None
-
-        # Reduce to principal range [0, 2)
-        ratio = ratio % 2
-        if ratio == 2:
-            ratio = sp.Rational(0, 1)
-
-        if ratio in cls._ANGLE_TABLE:
-            entry = cls._ANGLE_TABLE[ratio]
-            return True, entry['sin'], entry['cos'], entry['tan']
-        return False, None, None, None
-
+        if enable_injection:
+            self.xor_compiler = XorStringCompiler()
+        else:
+            self.xor_compiler = None
 
     @abstractmethod
     def compute(self, expr):
@@ -84,22 +42,6 @@ class MathEngine(ABC):
             return f"nested_{part}"
         return part * 2
 
-    # Stub dunder methods for math ops (except __add__ which is handled by segment_manager)
-    @abstractmethod
-    def __sub__(self, other):
-        pass
-
-    @abstractmethod
-    def __mul__(self, other):
-        pass
-
-    @abstractmethod
-    def __div__(self, other):
-        pass
-
-    @abstractmethod
-    def __pow__(self, other):
-        pass
 
     def __add__(self, other):
         """Overload __add__: Send part orders to segment manager per-slice."""
@@ -122,10 +64,69 @@ class MathEngine(ABC):
 class TrigonometryEngine(SliceMixin, MathEngine):
     """Handles trig functions: sin, cos, tan, etc. Implements dunders where ops apply."""
 
-    def __init__(self, segment_manager):
-        super().__init__(segment_manager)
+    def __init__(self, segment_manager, enable_injection=None):
+        # Initialize MathEngine first
+        MathEngine.__init__(self, segment_manager, enable_injection)
+        # Initialize SliceMixin (no args)
+        SliceMixin.__init__(self)
+
         self.traceback_info = []
         self._value = "0"
+
+        # Build extended constant table
+        self._CONSTANT_TABLE = self._build_constant_table(include_e=True)
+
+    def compute(self, expr):
+        """
+        Implement abstract compute method from MathEngine.
+        Routes trig function calls to appropriate methods.
+        """
+        self._add_traceback('compute', f'Processing: {expr}')
+
+        # Parse the expression to determine which trig function to call
+        expr_str = str(expr).strip()
+
+        # Extract function name and argument
+        if '(' in expr_str and ')' in expr_str:
+            func_name = expr_str[:expr_str.index('(')].strip()
+            arg_str = expr_str[expr_str.index('(') + 1:expr_str.rindex(')')].strip()
+
+            try:
+                # Convert argument to mpmath number
+                arg = mp.mpf(arg_str) if arg_str else 0
+
+                # Route to appropriate function
+                if func_name == 'sin':
+                    return self.sin(arg)
+                elif func_name == 'cos':
+                    return self.cos(arg)
+                elif func_name == 'tan':
+                    return self.tan(arg)
+                elif func_name == 'sinh':
+                    return self.sinh(arg)
+                elif func_name == 'cosh':
+                    return self.cosh(arg)
+                elif func_name == 'tanh':
+                    return self.tanh(arg)
+                elif func_name in ['asin', 'arcsin']:
+                    return self.asin(arg)
+                elif func_name in ['acos', 'arccos']:
+                    return self.acos(arg)
+                elif func_name in ['atan', 'arctan']:
+                    return self.atan(arg)
+                else:
+                    raise ValueError(f"Unknown trig function: {func_name}")
+
+            except (ValueError, TypeError) as e:
+                self._add_traceback('compute_error', str(e))
+                raise
+
+        # If not a function call, try to evaluate as a numeric value
+        try:
+            result = mp.mpf(str(expr))
+            return result
+        except:
+            raise ValueError(f"Cannot compute expression: {expr}")
 
     def _add_traceback(self, step, info):
         """Add step-wise traceback for debugging."""
@@ -156,272 +157,308 @@ class TrigonometryEngine(SliceMixin, MathEngine):
             )
         return final_results
 
+    def sympy_snapping(self, arg, constant_type='pi', snap=True, inject_precision=None):
+        # Normalize constant type
+        if constant_type in ['E', 'e']:
+            constant_type = 'e'  # Use lowercase internally
+
+        if snap:
+            # SymPy snapping mode
+            if constant_type == 'pi':
+                return self._snap_to_pi_multiple(arg)
+            elif constant_type == 'e':
+                return self._snap_to_e_multiple(arg)
+        else:
+            # Constant injection mode
+            if inject_precision is None:
+                inject_precision = min(mp.dps, 100000)
+
+            if self.xor_compiler:
+                const_value = self.xor_compiler.get_constant(constant_type, inject_precision)
+                if const_value:
+                    return mp.mpf(const_value)
+
+            # Fallback to mpmath constants
+            return mp.pi if constant_type == 'pi' else mp.e
+
     @staticmethod
-    def snap_to_angle(arg, *, max_multiple: int = 4):
+    def _snap_to_pi_multiple(arg, max_multiple=4):
         """
-        Return an *exact* multiple of π/4 (covers π/2, π) when the input
-        is within an adaptive tolerance; otherwise return arg unchanged.
-
-        The tolerance scales with current mp.dps so that, whether you run at
-        50 dps or one million, “almost-π” will still be captured.
+        Snap to exact multiples of π using SymPy symbolic math.
         """
-        # 10 ulps worth of slack at the current precision
         tol = mp.mpf(10) ** (-mp.dps + 1)
-
-        # Work in units of π/4                   (0, ¼π, ½π, ¾π, π, …)
         unit = mp.pi / 4
         ratio = arg / unit
-        nearest = mp.nint(ratio)                # nearest integer
+        nearest = mp.nint(ratio)
 
-        # Only snap small multiples (avoids wrapping very large arguments)
         if abs(nearest) <= max_multiple * 4 and mp.fabs(ratio - nearest) < tol:
-            return nearest * unit
+            # Return symbolic representation for exact evaluation
+            return sp.pi * (nearest / 4)
+        return arg
+
+    @staticmethod
+    def _snap_to_e_multiple(arg, max_power=3):
+        """
+        Snap to exact powers of e using SymPy symbolic math.
+        """
+        tol = mp.mpf(10) ** (-mp.dps + 1)
+
+        # Check for powers of e (e^0, e^1, e^2, etc.)
+        log_val = mp.log(mp.fabs(arg)) if arg != 0 else float('-inf')
+        nearest_power = mp.nint(log_val)
+
+        if abs(nearest_power) <= max_power:
+            expected = mp.exp(nearest_power)
+            if mp.fabs(arg - expected) < tol * mp.fabs(expected):
+                # Return symbolic representation
+                return sp.exp(nearest_power)
+
+        # Check for multiples of e
+        ratio = arg / mp.e
+        nearest_mult = mp.nint(ratio)
+
+        if abs(nearest_mult) <= max_power and mp.fabs(ratio - nearest_mult) < tol:
+            return sp.E * nearest_mult
 
         return arg
 
-    def compute(self, expr):
-        """Compute trig expressions with symbolic arg evaluation, pi recognition, and angle snapping."""
-        self._add_traceback('compute_start', f'Expression: {expr}')
+    @staticmethod
+    def _build_constant_table(include_e=True):
+        """
+        Build lookup table for both pi and e based exact angles/values.
+        """
+        table = {}
 
-        # ── 1.  mixed expression with + – * / ? ──────────────────────
-        if any(op in expr for op in ('+', '-', '*', '/', '^')):
+        # Pi-based angles (existing functionality)
+        dens = [1, 2, 3, 4, 5, 6, 8, 10, 12]
+        for d in dens:
+            for n in range(0, 2 * d + 1):
+                r = sp.Rational(n, d)
+                key = ('pi', sp.Rational(0, 1) if r == 2 else r)
+                if key not in table:
+                    angle = sp.pi * r
+                    s = sp.simplify(sp.sin(angle))
+                    c = sp.simplify(sp.cos(angle))
+                    t = sp.simplify(sp.tan(angle))
+                    if t is sp.zoo:
+                        t = sp.oo
+                    table[key] = {'sin': s, 'cos': c, 'tan': t}
+
+        if include_e:
+            # E-based values for hyperbolic functions
+            for power in range(-3, 4):  # e^-3 to e^3
+                key = ('e', power)
+                e_val = sp.exp(power)
+                sinh_val = (e_val - 1 / e_val) / 2
+                cosh_val = (e_val + 1 / e_val) / 2
+                tanh_val = sinh_val / cosh_val
+                table[key] = {
+                    'sinh': sp.simplify(sinh_val),
+                    'cosh': sp.simplify(cosh_val),
+                    'tanh': sp.simplify(tanh_val)
+                }
+
+        return table
+
+    def compute_with_injection(self, expr, use_injection=None):
+        """
+        Enhanced compute method with optional constant injection.
+
+        Args:
+            expr: Expression to compute
+            use_injection: If True, use injected constants; if False, use SymPy;
+                          if None, auto-detect based on precision
+        """
+        # Auto-detect injection mode based on precision
+        if use_injection is None:
+            use_injection = mp.dps >= 1000
+
+        self._add_traceback('compute_start', f'Expression: {expr}, Injection: {use_injection}')
+
+        # Initialize XorStringCompiler if needed and not present
+        if use_injection and not hasattr(self, 'xor_compiler'):
+            self.xor_compiler = XorStringCompiler()
+
+        # Pre-process expression for constant injection if enabled
+        if use_injection and hasattr(self, 'xor_compiler'):
             try:
-                sy = sp.sympify(expr, locals={'sin': sp.sin,
-                                              'cos': sp.cos,
-                                              'tan': sp.tan})
-                num = sy.evalf(mp.dps)  # evaluate at current precision
-                self._add_traceback('sympy_eval', f'{sy} -> {num}')
-                result = mp.mpf(str(num))
-                packed = convert_and_pack([result])
-                self._cache.append(packed)
-                self.segment_manager.receive_packed_segment(self.__class__.__name__, packed)
-                return str(result)
+                xor_result = self.xor_compiler ^ expr
+                if xor_result.get('constants_injected'):
+                    expr = xor_result['modified_expr']
+                    self._add_traceback('constant_injection',
+                                        f'Injected: {xor_result.get("detected_constants", [])}')
             except Exception as e:
-                self._add_traceback('sympy_fail', str(e))
-                # fall-through to single-call parser
+                self._add_traceback('injection_skip', str(e))
 
-        # ── 2.  single trig call  ─────────────────────────────────────
-        if expr.startswith('sin('):
-            arg_str = expr.split('sin(')[1].rstrip(')')
-            try:
-                sym_expr = sp.sympify(arg_str)
-                num      = sym_expr.evalf(mp.dps)     # use active precision
-                arg      = mp.mpf(str(num))
-            except Exception:
-                raise ValueError(f"Invalid argument: {arg_str}")
-            arg = self.snap_to_angle(arg)
-            result = mp.sin(arg)
-        elif 'cos(' in expr:
-            arg_str = expr.split('cos(')[1].rstrip(')')
-            try:
-                sym_expr = sp.sympify(arg_str)
-                num      = sym_expr.evalf(mp.dps)
-                arg      = mp.mpf(str(num))
-            except Exception:
-                raise ValueError(f"Invalid argument: {arg_str}")
-            arg = self.snap_to_angle(arg)
-            result = mp.cos(arg)
-        elif 'tan(' in expr:
-            arg_str = expr.split('tan(')[1].rstrip(')')
-            try:
-                sym_expr = sp.sympify(arg_str)
-                num      = sym_expr.evalf(mp.dps)
-                arg      = mp.mpf(str(num))
-            except Exception:
-                raise ValueError(f"Invalid argument: {arg_str}")
-            arg = self.snap_to_angle(arg)
-            result = mp.tan(arg)
-        elif 'asin(' in expr:
-            arg_str = expr.split('asin(')[1].rstrip(')')
-            try:
-                sym_expr = sp.sympify(arg_str)
-                num      = sym_expr.evalf(mp.dps)
-                arg      = mp.mpf(str(num))
-            except Exception:
-                raise ValueError(f"Invalid argument: {arg_str}")
-            arg = self.snap_to_angle(arg)
-            result = mp.asin(arg)
-        elif 'acos(' in expr:
-            arg_str = expr.split('acos(')[1].rstrip(')')
-            try:
-                sym_expr = sp.sympify(arg_str)
-                num      = sym_expr.evalf(mp.dps)
-                arg      = mp.mpf(str(num))
-            except Exception:
-                raise ValueError(f"Invalid argument: {arg_str}")
-            arg = self.snap_to_angle(arg)
-            result = mp.acos(arg)
-        elif 'atan(' in expr:
-            arg_str = expr.split('atan(')[1].rstrip(')')
-            try:
-                sym_expr = sp.sympify(arg_str)
-                num      = sym_expr.evalf(mp.dps)
-                arg      = mp.mpf(str(num))
-            except Exception:
-                raise ValueError(f"Invalid argument: {arg_str}")
-            arg = self.snap_to_angle(arg)
-            result = mp.atan(arg)
-        else:
-            raise ValueError(f"Unsupported trig expression: {expr}")
+    def sin(self, x, use_sympy=None):
+        """
+        Compute sin using mpmath or SymPy for exact values.
 
-        self._add_traceback('result', f'Trig result: {result}')
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        part_order = [{'part': 'trig_result', 'value': str(result), 'bytes': packed_bytes}]
-        self.segment_manager.receive_part_order(self.__class__.__name__, f'trig_{expr}', part_order)
-        return str(result)
-
-    def __sub__(self, other):
-        """Trig-specific sub (stub)."""
-        self._add_traceback('__sub__', f'Trig sub: {other}')
-        return self
-
-    def __mul__(self, other):
-        """Trig-specific mul (stub)."""
-        self._add_traceback('__mul__', f'Trig mul: {other}')
-        return self
-
-    def __div__(self, other):
-        """Trig-specific div (stub)."""
-        self._add_traceback('__div__', f'Trig div: {other}')
-        return self
-
-    def __pow__(self, other):
-        """Trig-specific pow (stub)."""
-        self._add_traceback('__pow__', f'Trig pow: {other}')
-        return self
-
-    def sin(self, x):
-        """Compute sin using mpmath."""
+        Args:
+            x: Input value
+            use_sympy: If True, try SymPy first; if None, auto-detect
+        """
         self._add_traceback('sin', f'sin({x})')
+
+        # Auto-detect if we should try SymPy
+        if use_sympy is None:
+            use_sympy = mp.dps >= 50  # Use SymPy for high precision
+
+        if use_sympy:
+            # Check if x is a special angle
+            snapped = self.sympy_snapping(x, constant_type='pi', snap=True)
+            if snapped != x:  # Was snapped to a pi multiple
+                # Look up exact value from constant table
+                for key, values in self._CONSTANT_TABLE.items():
+                    if key[0] == 'pi' and abs(float(sp.pi * key[1]) - float(x)) < 1e-10:
+                        exact_val = values['sin']
+                        # Convert SymPy exact to mpmath
+                        return mp.mpf(str(exact_val.evalf(mp.dps)))
+
+        # Standard mpmath computation
         result = mp.sin(mp.mpf(str(x)))
         packed_bytes = str(result).encode('utf-8')
         self._cache.append(packed_bytes)
         self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
         return result
 
-    def cos(self, x):
-        """Compute cos using mpmath."""
+    def cos(self, x, use_sympy=None):
+        """Compute cos with SymPy fallback for exact values."""
         self._add_traceback('cos', f'cos({x})')
+
+        if use_sympy is None:
+            use_sympy = mp.dps >= 50
+
+        if use_sympy:
+            snapped = self.sympy_snapping(x, constant_type='pi', snap=True)
+            if snapped != x:
+                for key, values in self._CONSTANT_TABLE.items():
+                    if key[0] == 'pi' and abs(float(sp.pi * key[1]) - float(x)) < 1e-10:
+                        exact_val = values['cos']
+                        return mp.mpf(str(exact_val.evalf(mp.dps)))
+
         result = mp.cos(mp.mpf(str(x)))
         packed_bytes = str(result).encode('utf-8')
         self._cache.append(packed_bytes)
         self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
         return result
 
-    def tan(self, x):
-        """Compute tan using mpmath."""
+    def tan(self, x, use_sympy=None):
+        """Compute tan with SymPy fallback and infinity handling."""
         self._add_traceback('tan', f'tan({x})')
+
+        if use_sympy is None:
+            use_sympy = mp.dps >= 50
+
+        if use_sympy:
+            snapped = self.sympy_snapping(x, constant_type='pi', snap=True)
+            if snapped != x:
+                for key, values in self._CONSTANT_TABLE.items():
+                    if key[0] == 'pi' and abs(float(sp.pi * key[1]) - float(x)) < 1e-10:
+                        exact_val = values['tan']
+                        if exact_val is sp.oo:
+                            return mp.inf
+                        elif exact_val is -sp.oo:
+                            return -mp.inf
+                        return mp.mpf(str(exact_val.evalf(mp.dps)))
+
         result = mp.tan(mp.mpf(str(x)))
         packed_bytes = str(result).encode('utf-8')
         self._cache.append(packed_bytes)
         self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
         return result
 
-    def sqrt(self, x):
-        """Compute sqrt using mpmath."""
-        self._add_traceback('sqrt', f'sqrt({x})')
-        result = mp.sqrt(mp.mpf(str(x)))
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
+    # For hyperbolic functions with e-based exact values:
 
-    def cbrt(self, x):
-        """Compute cbrt using mpmath."""
-        self._add_traceback('cbrt', f'cbrt({x})')
-        result = mp.cbrt(mp.mpf(str(x)))
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def atan(self, x):
-        """Compute atan using mpmath."""
-        self._add_traceback('atan', f'atan({x})')
-        result = mp.atan(mp.mpf(str(x)))
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def asin(self, x):
-        """Compute asin using mpmath."""
-        self._add_traceback('asin', f'asin({x})')
-        result = mp.asin(mp.mpf(str(x)))
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def acos(self, x):
-        """Compute acos using mpmath."""
-        self._add_traceback('acos', f'acos({x})')
-        result = mp.acos(mp.mpf(str(x)))
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def atan2(self, y, x):
-        """Compute atan2 using mpmath."""
-        self._add_traceback('atan2', f'atan2({y}, {x})')
-        result = mp.atan2(mp.mpf(str(y)), mp.mpf(str(x)))
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def asinh(self, x):
-        """Compute asinh using mpmath."""
-        self._add_traceback('asinh', f'asinh({x})')
-        result = mp.asinh(mp.mpf(str(x)))
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def acosh(self, x):
-        """Compute acosh using mpmath."""
-        self._add_traceback('acosh', f'acosh({x})')
-        result = mp.acosh(mp.mpf(str(x)))
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def atanh(self, x):
-        """Compute atanh using mpmath."""
-        self._add_traceback('atanh', f'atanh({x})')
-        result = mp.atanh(mp.mpf(str(x)))
-        packed_bytes = str(result).encode('utf-8')
-        self._cache.append(packed_bytes)
-        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
-        return result
-
-    def sinh(self, x):
-        """Compute sinh using mpmath."""
+    def sinh(self, x, use_sympy=None):
+        """Compute sinh with SymPy fallback for e-based exact values."""
         self._add_traceback('sinh', f'sinh({x})')
+
+        if use_sympy is None:
+            use_sympy = mp.dps >= 50
+
+        if use_sympy:
+            # Check for e-based special values
+            snapped = self.sympy_snapping(x, constant_type='e', snap=True)
+            if snapped != x:
+                for key, values in self._CONSTANT_TABLE.items():
+                    if key[0] == 'e' and abs(key[1] - mp.log(abs(x))) < 1e-10:
+                        exact_val = values['sinh']
+                        return mp.mpf(str(exact_val.evalf(mp.dps)))
+
         result = mp.sinh(mp.mpf(str(x)))
         packed_bytes = str(result).encode('utf-8')
         self._cache.append(packed_bytes)
         self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
         return result
 
-    def cosh(self, x):
-        """Compute cosh using mpmath."""
+    def cosh(self, x, use_sympy=None):
+        """Compute cosh with SymPy fallback for e-based exact values."""
         self._add_traceback('cosh', f'cosh({x})')
+
+        if use_sympy is None:
+            use_sympy = mp.dps >= 50
+
+        if use_sympy:
+            snapped = self.sympy_snapping(x, constant_type='e', snap=True)
+            if snapped != x:
+                for key, values in self._CONSTANT_TABLE.items():
+                    if key[0] == 'e' and abs(key[1] - mp.log(abs(x))) < 1e-10:
+                        exact_val = values['cosh']
+                        return mp.mpf(str(exact_val.evalf(mp.dps)))
+
         result = mp.cosh(mp.mpf(str(x)))
         packed_bytes = str(result).encode('utf-8')
         self._cache.append(packed_bytes)
         self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
         return result
 
-    def tanh(self, x):
-        """Compute tanh using mpmath."""
+    def tanh(self, x, use_sympy=None):
+        """Compute tanh with SymPy fallback for e-based exact values."""
         self._add_traceback('tanh', f'tanh({x})')
+
+        if use_sympy is None:
+            use_sympy = mp.dps >= 50
+
+        if use_sympy:
+            snapped = self.sympy_snapping(x, constant_type='e', snap=True)
+            if snapped != x:
+                for key, values in self._CONSTANT_TABLE.items():
+                    if key[0] == 'e' and abs(key[1] - mp.log(abs(x))) < 1e-10:
+                        exact_val = values['tanh']
+                        return mp.mpf(str(exact_val.evalf(mp.dps)))
+
         result = mp.tanh(mp.mpf(str(x)))
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def asin(self, x, use_sympy=None):
+        """Compute arcsin."""
+        self._add_traceback('asin', f'asin({x})')
+
+        result = mp.asin(mp.mpf(str(x)))
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def acos(self, x, use_sympy=None):
+        """Compute arccos."""
+        self._add_traceback('acos', f'acos({x})')
+
+        result = mp.acos(mp.mpf(str(x)))
+        packed_bytes = str(result).encode('utf-8')
+        self._cache.append(packed_bytes)
+        self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
+        return result
+
+    def atan(self, x, use_sympy=None):
+        """Compute arctan."""
+        self._add_traceback('atan', f'atan({x})')
+
+        result = mp.atan(mp.mpf(str(x)))
         packed_bytes = str(result).encode('utf-8')
         self._cache.append(packed_bytes)
         self.segment_manager.receive_packed_segment(self.__class__.__name__, packed_bytes)
