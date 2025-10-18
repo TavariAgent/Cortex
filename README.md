@@ -86,10 +86,10 @@ python repl.py
 **- More Engines**
 - More Engines (e.g. Physics, Chemistry, etc.)
 - More Engines (e.g. Finance, Economics, etc.)
-- More Engines (e.g. Biology, Chemistry, etc.)
+- More Engines (e.g. Biology, Graphing, etc.)
 - More Engines (e.g. Astronomy, Physics, etc.)
 - More Engines (e.g. Robotics, Mechanics, etc.)
-- More Engines (e.g. Computer Science, Math, etc.)
+- More Engines (e.g. Computer Science, Lagrangian, etc.)
 - More Engines (e.g. Engineering, Mechanical, etc.)
 - More Engines (e.g. Bioengineering, Biomechanics, etc.)
 - More Engines (e.g. Biomedical, Medical, etc.)
