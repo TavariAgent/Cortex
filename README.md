@@ -72,7 +72,7 @@ python repl.py
 - More Operators (e.g. Logarithmic, etc.)
 - More Operators (e.g. Exponential, etc.)
 
-**- More Functions**
+**- Support for Units**
 - Unit Conversion and assembly
 - More Units (SI, Imperial, etc.)
 - More Units (Temperature, Pressure, etc.)
@@ -83,16 +83,16 @@ python repl.py
 - More Units (Frequency, etc.)
 
 **- More Engines**
-- * More Engines (e.g. Physics, Chemistry, etc.)
-- * More Engines (e.g. Finance, Economics, etc.)
-- * More Engines (e.g. Biology, Chemistry, etc.)
-- * More Engines (e.g. Astronomy, Physics, etc.)
-- * More Engines (e.g. Robotics, Mechanics, etc.)
-- * More Engines (e.g. Computer Science, Math, etc.)
-- * More Engines (e.g. Engineering, Mechanical, etc.)
-- * More Engines (e.g. Bioengineering, Biomechanics, etc.)
-- * More Engines (e.g. Biomedical, Medical, etc.)
-- * More Engines (e.g. Atomic, etc.)
+- More Engines (e.g. Physics, Chemistry, etc.)
+- More Engines (e.g. Finance, Economics, etc.)
+- More Engines (e.g. Biology, Chemistry, etc.)
+- More Engines (e.g. Astronomy, Physics, etc.)
+- More Engines (e.g. Robotics, Mechanics, etc.)
+- More Engines (e.g. Computer Science, Math, etc.)
+- More Engines (e.g. Engineering, Mechanical, etc.)
+- More Engines (e.g. Bioengineering, Biomechanics, etc.)
+- More Engines (e.g. Biomedical, Medical, etc.)
+- More Engines (e.g. Atomic, etc.)
 
 ## Credits
 
