@@ -56,6 +56,7 @@ python repl.py
 ```
 
 ## Roadmap Near-Term to Long-Term
+- Elementary Engine (e.g. exponents, logarithms, roots, etc.)
 - Calculus Engine (derivatives, integrals, etc.)
 - Complex Algebra Engine (complex numbers, complex roots, etc.)
 - Trigonometry Engine (more angles and functions, etc.)
